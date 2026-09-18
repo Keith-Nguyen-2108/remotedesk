@@ -1,0 +1,64 @@
+{
+  "name": "remotedesk",
+  "productName": "RemoteDesk",
+  "version": "0.1.0",
+  "description": "Personal remote desktop control (screen view, mouse/keyboard, file/link/clipboard) for macOS and Windows",
+  "author": "Keith Nguyen",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f",
+    "postinstall": "electron-builder install-app-deps",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist": "electron-builder -mw"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^31.7.0",
+    "electron-builder": "^24.13.3",
+    "@electron/rebuild": "^3.6.0"
+  },
+  "build": {
+    "appId": "com.keith.remotedesk",
+    "productName": "RemoteDesk",
+    "files": [
+      "src/**/*",
+      "!**/*.md"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@nut-tree-fork/**"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSScreenCaptureUsageDescription": "RemoteDesk needs screen recording to share this computer's screen.",
+        "NSAppleEventsUsageDescription": "RemoteDesk needs accessibility to control mouse and keyboard."
+      }
+    },
+    "dmg": {
+      "sign": false
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}
