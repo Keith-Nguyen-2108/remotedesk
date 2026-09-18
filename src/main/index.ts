@@ -1,5 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
+import { registerDisplayMediaHandler } from './capture'
+import { registerIpc } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -33,6 +35,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  registerDisplayMediaHandler()
+  registerIpc()
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
