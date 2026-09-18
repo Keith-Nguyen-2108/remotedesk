@@ -7,11 +7,18 @@ import { parseInputMessage, parseJson, type InputMessage, type MouseButton } fro
 mouse.config.autoDelayMs = 0
 keyboard.config.autoDelayMs = 0
 
-const BUTTONS: Record<MouseButton, unknown> = {
+const BUTTONS: Record<MouseButton, Button> = {
   left: Button.LEFT,
   right: Button.RIGHT,
   middle: Button.MIDDLE
 }
+
+/**
+ * keymap.ts returns Key member *names* so it stays free of the native import.
+ * This is the one place that turns a name back into the enum value; an unknown
+ * name resolves to undefined and the event is dropped.
+ */
+const KEY_BY_NAME = Key as unknown as Record<string, Key | undefined>
 
 let enabled = false
 let cachedScreen: Size | null = null
@@ -41,11 +48,12 @@ export function isInputEnabled(): boolean {
 
 async function releaseAll(): Promise<void> {
   for (const name of heldKeys) {
-    await keyboard.releaseKey((Key as Record<string, never>)[name])
+    const key = KEY_BY_NAME[name]
+    if (key !== undefined) await keyboard.releaseKey(key)
   }
   heldKeys.clear()
   for (const button of heldButtons) {
-    await mouse.releaseButton(BUTTONS[button] as never)
+    await mouse.releaseButton(BUTTONS[button])
   }
   heldButtons.clear()
 }
@@ -73,13 +81,13 @@ export async function applyInput(msg: InputMessage): Promise<void> {
     case 'down':
       await moveTo(msg.x, msg.y)
       heldButtons.add(msg.b)
-      await mouse.pressButton(BUTTONS[msg.b] as never)
+      await mouse.pressButton(BUTTONS[msg.b])
       return
 
     case 'up':
       await moveTo(msg.x, msg.y)
       heldButtons.delete(msg.b)
-      await mouse.releaseButton(BUTTONS[msg.b] as never)
+      await mouse.releaseButton(BUTTONS[msg.b])
       return
 
     case 'wheel': {
@@ -94,17 +102,19 @@ export async function applyInput(msg: InputMessage): Promise<void> {
 
     case 'keydown': {
       const name = mapKeyCode(msg.code)
-      if (!name) return
+      const key = name === null ? undefined : KEY_BY_NAME[name]
+      if (name === null || key === undefined) return
       heldKeys.add(name)
-      await keyboard.pressKey((Key as Record<string, never>)[name])
+      await keyboard.pressKey(key)
       return
     }
 
     case 'keyup': {
       const name = mapKeyCode(msg.code)
-      if (!name) return
+      const key = name === null ? undefined : KEY_BY_NAME[name]
+      if (name === null || key === undefined) return
       heldKeys.delete(name)
-      await keyboard.releaseKey((Key as Record<string, never>)[name])
+      await keyboard.releaseKey(key)
       return
     }
   }

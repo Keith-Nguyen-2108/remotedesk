@@ -1,5 +1,24 @@
-import { clipboard, nativeImage } from 'electron'
+import { clipboard as electronClipboard, nativeImage } from 'electron'
 import { ClipboardSync, type ClipSnapshot } from '../shared/clipboard-sync'
+
+/** Derived from a real value, so it cannot drift from the installed Electron. */
+type NativeImg = ReturnType<typeof nativeImage.createFromDataURL>
+
+/**
+ * electron.d.ts types the exported `clipboard` as a bare `Clipboard`, but its
+ * CrossProcessExports namespace never aliases that name. With `lib: ["DOM"]`
+ * enabled (the renderer needs it) the name binds to the DOM's async
+ * navigator.clipboard instead, which has no readImage/writeImage and an async
+ * readText. Pin the shape of the main-process API we actually call.
+ */
+interface MainClipboard {
+  readText(): string
+  writeText(text: string): void
+  readImage(): NativeImg
+  writeImage(image: NativeImg): void
+}
+
+const clipboard = electronClipboard as unknown as MainClipboard
 
 const POLL_INTERVAL_MS = 800
 

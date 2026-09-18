@@ -8,7 +8,7 @@ let mainWindow: BrowserWindow | null = null
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1100,
-    height: 720,
+    height: 760,
     title: 'RemoteDesk',
     show: false,
     webPreferences: {
@@ -26,6 +26,14 @@ function createWindow(): void {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devServer = process.env.ELECTRON_RENDERER_URL
+    const isDevServer = devServer !== undefined && url.startsWith(devServer)
+    if (!isDevServer && !url.startsWith('file://')) event.preventDefault()
+  })
+
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
