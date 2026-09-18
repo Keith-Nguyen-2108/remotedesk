@@ -1,64 +1,32 @@
 {
   "name": "remotedesk",
-  "productName": "RemoteDesk",
   "version": "0.1.0",
-  "description": "Personal remote desktop control (screen view, mouse/keyboard, file/link/clipboard) for macOS and Windows",
-  "author": "Keith Nguyen",
-  "license": "MIT",
-  "main": "src/main/main.js",
+  "description": "Personal LAN remote desktop",
+  "main": "out/main/index.js",
+  "license": "UNLICENSED",
+  "private": true,
   "scripts": {
-    "start": "electron .",
-    "rebuild": "electron-rebuild -f",
-    "postinstall": "electron-builder install-app-deps",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist": "electron-builder -mw"
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "@nut-tree-fork/nut-js": "^4.2.0",
-    "ws": "^8.18.0"
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "electron": "^31.7.0",
-    "electron-builder": "^24.13.3",
-    "@electron/rebuild": "^3.6.0"
-  },
-  "build": {
-    "appId": "com.keith.remotedesk",
-    "productName": "RemoteDesk",
-    "files": [
-      "src/**/*",
-      "!**/*.md"
-    ],
-    "asarUnpack": [
-      "**/node_modules/@nut-tree-fork/**"
-    ],
-    "mac": {
-      "category": "public.app-category.utilities",
-      "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
-      ],
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "extendInfo": {
-        "NSScreenCaptureUsageDescription": "RemoteDesk needs screen recording to share this computer's screen.",
-        "NSAppleEventsUsageDescription": "RemoteDesk needs accessibility to control mouse and keyboard."
-      }
-    },
-    "dmg": {
-      "sign": false
-    },
-    "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false
-    }
+    "@types/node": "^24.4.0",
+    "@types/ws": "^8.18.1",
+    "electron": "^44.4.2",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.3.6",
+    "vitest": "^5.0.1"
   }
 }
