@@ -169,3 +169,62 @@ describe('SignalingServer', () => {
     ws.close()
   })
 })
+
+import { SignalingClient } from '../../src/main/signaling-client'
+
+describe('SignalingClient', () => {
+  it('completes the handshake against the real server', async () => {
+    const { port, received } = await startServer({ pin: '222333' })
+    const events: string[] = []
+    const client = new SignalingClient({
+      host: '127.0.0.1',
+      port,
+      pin: '222333',
+      clientName: 'Laptop',
+      onConnected: (hostName) => events.push(`connected:${hostName}`),
+      onMessage: (msg) => events.push(`msg:${msg.t}`),
+      onClosed: (code) => events.push(`closed:${code}`)
+    })
+
+    await client.connect()
+    expect(events).toContain('connected:TestHost')
+
+    client.send({ t: 'answer', sdp: 'v=0 from client' })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(received).toEqual([{ t: 'answer', sdp: 'v=0 from client' }])
+
+    await client.close()
+  })
+
+  it('rejects connect() when the pin is wrong', async () => {
+    const { port } = await startServer({ pin: '222333' })
+    const client = new SignalingClient({
+      host: '127.0.0.1',
+      port,
+      pin: '000000',
+      clientName: 'Laptop',
+      onConnected: () => undefined,
+      onMessage: () => undefined,
+      onClosed: () => undefined
+    })
+
+    await expect(client.connect()).rejects.toThrow(/pin|auth/i)
+  })
+
+  it('surfaces a readable reason when the host is busy', async () => {
+    const { port } = await startServer({ pin: '222333' })
+    const first = await authenticate(port, '222333', 'First')
+    const client = new SignalingClient({
+      host: '127.0.0.1',
+      port,
+      pin: '222333',
+      clientName: 'Second',
+      onConnected: () => undefined,
+      onMessage: () => undefined,
+      onClosed: () => undefined
+    })
+
+    await expect(client.connect()).rejects.toThrow(/already has a client|client is connected/i)
+    first.close()
+  })
+})
