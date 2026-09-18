@@ -21,7 +21,9 @@ Read this whole section before Task 1. These are the non-obvious facts that deci
 - `@nut-tree-fork/nut-js@4.2.6` — the API used in this plan (`mouse`, `keyboard`, `screen`, `Key`, `Button`, `Point`, `straightTo`)
 - it pulls `@nut-tree-fork/libnut@4.2.6`, a **native module with per-platform prebuilt binaries**
 
-Consequence: a macOS `npm install` downloads only the macOS binary. **You cannot produce a working Windows `.exe` from this Mac.** That is why Task 19 sets up a GitHub Actions matrix build (macOS runner → `.dmg`, Windows runner → `.exe`). A local Windows build script is also provided for the case where a Windows machine is available.
+Consequence (as written): a macOS `npm install` was expected to fetch only the macOS binary, making a Windows `.exe` unbuildable from a Mac.
+
+> **Correction, verified during implementation:** this was too pessimistic. The fork ships its native code as one package per platform (`libnut-darwin`, `libnut-win32`, `libnut-linux`) and npm installs **all three** regardless of host OS, so `npm run dist:win` on macOS produces an `.exe` containing a genuine PE32+ `libnut.node`. The macOS-only permission shim that gets bundled with it is required inside a try/catch and short-circuits on non-darwin platforms. CI is still set up (Task 21) and is the right way to get natively-built, hardware-verified artifacts.** That is why Task 19 sets up a GitHub Actions matrix build (macOS runner → `.dmg`, Windows runner → `.exe`). A local Windows build script is also provided for the case where a Windows machine is available.
 
 Fallback if the fork ever breaks: `@jitsi/robotjs@0.6.24` (maintained robotjs fork). The input layer in Task 11 is deliberately isolated behind one module (`src/main/input.ts`) so that swap touches exactly one file.
 

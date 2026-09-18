@@ -1,0 +1,45 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+            artifact: remotedesk-macos
+            files: dist/*.dmg
+          - os: windows-latest
+            script: dist:win
+            artifact: remotedesk-windows
+            files: dist/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npm run ${{ matrix.script }}
+        env:
+          # Never try to pick up a signing identity from the runner keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error

@@ -2,6 +2,7 @@
   "name": "remotedesk",
   "version": "0.1.0",
   "description": "Personal LAN remote desktop",
+  "author": "Keith Nguyen",
   "main": "out/main/index.js",
   "license": "UNLICENSED",
   "private": true,
