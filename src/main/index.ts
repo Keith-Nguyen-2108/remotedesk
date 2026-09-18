@@ -7,7 +7,7 @@ let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1100,
+    width: 1280,
     height: 820,
     title: 'RemoteDesk',
     show: false,

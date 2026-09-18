@@ -42,7 +42,9 @@ const api = {
     isEnabled: () => ipcRenderer.invoke('input:is-enabled')
   },
   files: {
-    save: (name: string, data: Uint8Array) => ipcRenderer.invoke('file:save', { name, data })
+    save: (name: string, data: Uint8Array) => ipcRenderer.invoke('file:save', { name, data }),
+    reveal: (path: string) => ipcRenderer.invoke('file:reveal', path),
+    previewImage: (dataUrl: string) => ipcRenderer.invoke('file:preview-image', dataUrl)
   },
   clipboard: {
     watch: (value: boolean) => ipcRenderer.invoke('clipboard:watch', value),
@@ -54,8 +56,7 @@ const api = {
     openScreen: () => ipcRenderer.invoke('permissions:open-screen'),
     openAccessibility: () => ipcRenderer.invoke('permissions:open-accessibility'),
     promptAccessibility: () => ipcRenderer.invoke('permissions:prompt-accessibility')
-  },
-  openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url)
+  }
 }
 
 contextBridge.exposeInMainWorld('rd', api)

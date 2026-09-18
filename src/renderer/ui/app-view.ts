@@ -2,6 +2,7 @@ import { ClientSession } from '../rtc/client-session'
 import { HostSession } from '../rtc/host-session'
 import { PermissionGate } from './permission-gate'
 import { RemoteScreen } from './remote-screen'
+import { SharesPanel } from './shares-panel'
 import { TransferPanel } from './transfer-panel'
 
 interface Identity {
@@ -25,42 +26,47 @@ export function createAppView(): HTMLElement {
   const root = document.createElement('div')
   root.className = 'app'
   root.innerHTML = `
-    <section class="card" id="identity-card">
-      <h2>Your ID</h2>
-      <p class="hint">Send this to the other machine. It stays the same until you regenerate it.</p>
-      <div class="row id-row">
-        <code class="token" id="my-token">---- ---- ----</code>
-        <button id="copy-id">Copy</button>
-        <button id="regen-id" class="secondary">Regenerate</button>
-        <span class="copied" id="copied-flag" hidden>copied</span>
-      </div>
-      <p class="status" id="listen-status">starting...</p>
-    </section>
+    <div class="layout">
+      <div class="main-col">
+        <section class="card" id="identity-card">
+          <h2>Your ID</h2>
+          <p class="hint">Send this to the other machine. It stays the same until you regenerate it.</p>
+          <div class="row id-row">
+            <code class="token" id="my-token">---- ---- ----</code>
+            <button id="copy-id">Copy</button>
+            <button id="regen-id" class="secondary">Regenerate</button>
+            <span class="copied" id="copied-flag" hidden>copied</span>
+          </div>
+          <p class="status" id="listen-status">starting...</p>
+        </section>
 
-    <section class="card">
-      <h2>Connect to a machine</h2>
-      <p class="hint">Paste the ID the other machine is showing.</p>
-      <div class="row">
-        <input id="peer-token" placeholder="1234 5678 9012" autocomplete="off" spellcheck="false" />
-        <button id="connect">Connect</button>
-        <button id="disconnect" class="secondary" disabled>Disconnect</button>
-      </div>
-      <label class="row">
-        <input type="checkbox" id="take-control" disabled />
-        Take control of their mouse and keyboard
-      </label>
-      <p class="status" id="session-status">idle</p>
-    </section>
+        <section class="card">
+          <h2>Connect to a machine</h2>
+          <p class="hint">Paste the ID the other machine is showing.</p>
+          <div class="row">
+            <input id="peer-token" placeholder="1234 5678 9012" autocomplete="off" spellcheck="false" />
+            <button id="connect">Connect</button>
+            <button id="disconnect" class="secondary" disabled>Disconnect</button>
+          </div>
+          <label class="row">
+            <input type="checkbox" id="take-control" disabled />
+            Take control of their mouse and keyboard
+          </label>
+          <p class="status" id="session-status">idle</p>
+        </section>
 
-    <section class="card" id="sharing-card">
-      <h2>When someone connects to you</h2>
-      <label class="row">Share screen <select id="screen-select"></select></label>
-      <label class="row">
-        <input type="checkbox" id="allow-control" checked />
-        Let them control my mouse and keyboard
-      </label>
-      <p class="status" id="incoming-status">nobody connected</p>
-    </section>
+        <section class="card" id="sharing-card">
+          <h2>When someone connects to you</h2>
+          <label class="row">Share screen <select id="screen-select"></select></label>
+          <label class="row">
+            <input type="checkbox" id="allow-control" checked />
+            Let them control my mouse and keyboard
+          </label>
+          <p class="status" id="incoming-status">nobody connected</p>
+        </section>
+      </div>
+      <div class="shares-col"></div>
+    </div>
   `
 
   const tokenEl = root.querySelector<HTMLElement>('#my-token')!
@@ -79,6 +85,7 @@ export function createAppView(): HTMLElement {
   const sharingCard = root.querySelector<HTMLElement>('#sharing-card')!
 
   let transfer: TransferPanel | null = null
+  const shares = new SharesPanel()
 
   const setSessionStatus = (text: string): void => {
     sessionStatus.textContent = text
@@ -117,14 +124,23 @@ export function createAppView(): HTMLElement {
     return { ctrl: hostSession.channel('ctrl'), file: hostSession.channel('file') }
   }
 
-  transfer = new TransferPanel({ channels: activeChannels })
+  transfer = new TransferPanel({
+    channels: activeChannels,
+    onSharedText: (text) => shares.addText(text),
+    onSharedLink: (url) => shares.addLink(url),
+    onSharedImage: (dataUrl) => shares.addImage(dataUrl),
+    onSharedFile: (name, path) => shares.addFile(name, path)
+  })
 
   const gate = new PermissionGate((ready) => {
     sharingCard.classList.toggle('blocked', !ready)
   })
 
+  const mainCol = root.querySelector<HTMLElement>('.main-col')!
+  const sharesCol = root.querySelector<HTMLElement>('.shares-col')!
   root.querySelector<HTMLElement>('#identity-card')!.after(gate.el)
-  root.append(screen.el, transfer.el)
+  mainCol.append(screen.el, transfer.el)
+  sharesCol.append(shares.el)
   gate.start()
 
   // --- identity ---

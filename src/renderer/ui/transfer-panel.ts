@@ -1,10 +1,16 @@
 import { parseCtrlMessage, parseJson } from '../../shared/protocol'
+import { imageDataUrlSubtype } from '../../shared/shares'
 import { normalizeExternalUrl } from '../../shared/url-guard'
 import { FileReceiver, sendFile } from '../rtc/file-transfer'
 
 export interface TransferPanelPorts {
   /** Returns the live data channels, or undefined when not connected. */
   channels: () => { ctrl?: RTCDataChannel; file?: RTCDataChannel }
+  /** A share arrived from the peer - hand it to the Shares panel, don't act on it here. */
+  onSharedText: (text: string) => void
+  onSharedLink: (url: string) => void
+  onSharedImage: (dataUrl: string) => void
+  onSharedFile: (name: string, path: string) => void
 }
 
 const MAX_LOG_LINES = 40
@@ -94,16 +100,16 @@ export class TransferPanel {
     } else if (msg.t === 'file-ack') {
       this.say(msg.ok ? 'peer saved the file' : `peer could not save it: ${msg.message ?? ''}`)
     } else if (msg.t === 'link') {
-      void window.rd.openExternal(msg.url).then((result) => {
-        const r = result as { opened: boolean; reason?: string; url?: string }
-        this.say(r.opened ? `opened link: ${r.url}` : `link blocked (${r.reason})`)
-      })
+      this.ports.onSharedLink(msg.url)
+      this.say('link received - see Shares')
     } else if (msg.t === 'clip-text') {
-      void window.rd.clipboard.applyRemote({ kind: 'text', text: msg.text })
-      this.say(`clipboard updated from peer (${msg.text.length} chars)`)
+      this.ports.onSharedText(msg.text)
+      this.say(`text received (${msg.text.length} chars) - see Shares`)
     } else if (msg.t === 'clip-image') {
-      void window.rd.clipboard.applyRemote({ kind: 'image', dataUrl: msg.dataUrl })
-      this.say('clipboard image updated from peer')
+      if (imageDataUrlSubtype(msg.dataUrl)) {
+        this.ports.onSharedImage(msg.dataUrl)
+        this.say('image received - see Shares')
+      }
     }
   }
 
@@ -158,6 +164,7 @@ export class TransferPanel {
       | { saved: true; path: string }
       | { saved: false }
     this.say(result.saved ? `saved to ${result.path}` : `save cancelled for ${name}`)
+    if (result.saved) this.ports.onSharedFile(name, result.path)
     const ctrl = this.ports.channels().ctrl
     if (ctrl?.readyState === 'open') {
       ctrl.send(JSON.stringify({ t: 'file-ack', id: name, ok: result.saved }))

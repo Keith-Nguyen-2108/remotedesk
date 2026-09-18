@@ -1,11 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { hostname, platform } from 'node:os'
 import { basename, join } from 'node:path'
 import type { ClipSnapshot } from '../shared/clipboard-sync'
 import { formatToken, normalizeToken } from '../shared/identity'
 import { DEFAULT_SIGNAL_PORT, type SignalMessage } from '../shared/protocol'
-import { normalizeExternalUrl } from '../shared/url-guard'
+import { imageDataUrlSubtype } from '../shared/shares'
 import { getSelectedScreen, listScreens, setSelectedScreen } from './capture'
 import { ClipboardWatcher } from './clipboard'
 import { DiscoveryResponder, findHostByToken } from './discovery'
@@ -192,25 +193,25 @@ export function registerIpc(): void {
   ipcMain.handle('permissions:open-accessibility', () => openAccessibilitySettings())
   ipcMain.handle('permissions:prompt-accessibility', () => promptAccessibility())
 
-  // ---- links ----
-  ipcMain.handle('shell:open-external', async (_e, url: string) => {
-    const safe = normalizeExternalUrl(url)
-    if (!safe) return { opened: false as const, reason: 'unsafe or malformed url' }
+  // ---- shares panel: reveal a saved file, or preview an image with the OS's own viewer ----
+  ipcMain.handle('file:reveal', (_e, path: string) => {
+    shell.showItemInFolder(path)
+  })
 
-    const [win] = BrowserWindow.getAllWindows()
-    if (win) {
-      const { response } = await dialog.showMessageBox(win, {
-        type: 'question',
-        buttons: ['Open', 'Cancel'],
-        defaultId: 0,
-        cancelId: 1,
-        message: 'Open this link sent from the other machine?',
-        detail: safe
-      })
-      if (response !== 0) return { opened: false as const, reason: 'declined' }
-    }
+  ipcMain.handle('file:preview-image', async (_e, dataUrl: string) => {
+    const subtype = imageDataUrlSubtype(dataUrl)
+    if (!subtype) return { opened: false as const, reason: 'not an image' }
 
-    await shell.openExternal(safe)
-    return { opened: true as const, url: safe }
+    const ext = subtype === 'jpeg' ? 'jpg' : subtype.replace(/[^a-z0-9]/g, '') || 'png'
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    const dir = join(app.getPath('temp'), 'remotedesk-previews')
+    await mkdir(dir, { recursive: true })
+    const filePath = join(dir, `share-${Date.now()}-${randomBytes(4).toString('hex')}.${ext}`)
+    await writeFile(filePath, Buffer.from(base64, 'base64'))
+
+    // openPath hands the file to whatever the OS already uses for that type
+    // (Preview on macOS, Photos on Windows) - no bespoke viewer to maintain.
+    const error = await shell.openPath(filePath)
+    return error ? { opened: false as const, reason: error } : { opened: true as const, path: filePath }
   })
 }
