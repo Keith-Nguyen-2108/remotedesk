@@ -1,4 +1,5 @@
 import { createSocket, type Socket } from 'node:dgram'
+import { computeProof, generateChallenge, verifyProof } from '../shared/auth'
 import { DISCOVERY_MAGIC, DISCOVERY_PORT, PROTOCOL_VERSION, parseJson } from '../shared/protocol'
 
 export interface HostBeacon {
@@ -11,25 +12,50 @@ export interface DiscoveredHost extends HostBeacon {
   address: string
 }
 
+interface DiscoveryQuery {
+  magic: string
+  version: number
+  nonce: string
+  proof: string
+}
+
 interface BeaconWire extends HostBeacon {
   magic: string
   version: number
 }
 
-/** Runs on the host: replies to discovery queries while sharing is enabled. */
+/**
+ * Runs on every machine so it can be reached by its ID.
+ *
+ * The query carries HMAC(token, nonce) rather than the token, so a machine
+ * looking for a partner proves it already knows that ID without broadcasting
+ * it. Only the holder of that ID can verify the proof, and everyone else stays
+ * silent, which also means a sniffer on the LAN learns nothing reusable.
+ */
 export class DiscoveryResponder {
   private socket: Socket | null = null
 
-  constructor(private readonly opts: { port?: number; beacon: () => HostBeacon }) {}
+  constructor(
+    private readonly opts: { port?: number; token: () => string; beacon: () => HostBeacon }
+  ) {}
 
   async start(): Promise<void> {
     const socket = createSocket({ type: 'udp4', reuseAddr: true })
+
     socket.on('message', (buf, rinfo) => {
-      if (buf.toString() !== DISCOVERY_MAGIC) return
-      const beacon = this.opts.beacon()
-      const wire: BeaconWire = { magic: DISCOVERY_MAGIC, version: PROTOCOL_VERSION, ...beacon }
+      const query = parseJson(buf.toString()) as Partial<DiscoveryQuery> | null
+      if (!query || query.magic !== DISCOVERY_MAGIC || query.version !== PROTOCOL_VERSION) return
+      if (typeof query.nonce !== 'string' || typeof query.proof !== 'string') return
+      if (!verifyProof(this.opts.token(), query.nonce, query.proof)) return
+
+      const wire: BeaconWire = {
+        magic: DISCOVERY_MAGIC,
+        version: PROTOCOL_VERSION,
+        ...this.opts.beacon()
+      }
       socket.send(JSON.stringify(wire), rinfo.port, rinfo.address)
     })
+
     socket.on('error', () => void this.stop())
 
     await new Promise<void>((resolve, reject) => {
@@ -47,23 +73,31 @@ export class DiscoveryResponder {
   }
 }
 
-/** Runs on the client: broadcasts one query and collects replies until the timeout. */
-export function queryHosts(
+/** Resolves an ID to a reachable address, or null if nobody on the LAN answers. */
+export function findHostByToken(
+  token: string,
   opts: { port?: number; timeoutMs?: number; broadcastAddress?: string } = {}
-): Promise<DiscoveredHost[]> {
+): Promise<DiscoveredHost | null> {
   const port = opts.port ?? DISCOVERY_PORT
-  const timeoutMs = opts.timeoutMs ?? 1200
+  const timeoutMs = opts.timeoutMs ?? 1500
   const broadcastAddress = opts.broadcastAddress ?? '255.255.255.255'
 
   return new Promise((resolve) => {
     const socket = createSocket({ type: 'udp4', reuseAddr: true })
-    const found = new Map<string, DiscoveredHost>()
+    let settled = false
+
+    const finish = (result: DiscoveredHost | null): void => {
+      if (settled) return
+      settled = true
+      socket.close()
+      resolve(result)
+    }
 
     socket.on('message', (buf, rinfo) => {
       const wire = parseJson(buf.toString()) as Partial<BeaconWire> | null
       if (!wire || wire.magic !== DISCOVERY_MAGIC || wire.version !== PROTOCOL_VERSION) return
       if (typeof wire.hostName !== 'string' || typeof wire.port !== 'number') return
-      found.set(`${rinfo.address}:${wire.port}`, {
+      finish({
         address: rinfo.address,
         hostName: wire.hostName,
         port: wire.port,
@@ -71,18 +105,19 @@ export function queryHosts(
       })
     })
 
-    socket.on('error', () => {
-      socket.close()
-      resolve([])
-    })
+    socket.on('error', () => finish(null))
 
     socket.bind(0, () => {
       socket.setBroadcast(true)
-      socket.send(DISCOVERY_MAGIC, port, broadcastAddress)
-      setTimeout(() => {
-        socket.close()
-        resolve([...found.values()])
-      }, timeoutMs)
+      const nonce = generateChallenge()
+      const query: DiscoveryQuery = {
+        magic: DISCOVERY_MAGIC,
+        version: PROTOCOL_VERSION,
+        nonce,
+        proof: computeProof(token, nonce)
+      }
+      socket.send(JSON.stringify(query), port, broadcastAddress)
+      setTimeout(() => finish(null), timeoutMs)
     })
   })
 }

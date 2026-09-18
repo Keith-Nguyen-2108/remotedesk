@@ -9,24 +9,28 @@ function on(channel: string, cb: (payload: unknown) => void): () => void {
 }
 
 const api = {
-  identity: () => ipcRenderer.invoke('app:identity'),
+  identity: {
+    get: () => ipcRenderer.invoke('identity:get'),
+    regenerate: () => ipcRenderer.invoke('identity:regenerate'),
+    copy: () => ipcRenderer.invoke('identity:copy')
+  },
   screens: {
     list: () => ipcRenderer.invoke('screens:list'),
     select: (id: string) => ipcRenderer.invoke('screens:select', id)
   },
+  session: {
+    connect: (token: string) => ipcRenderer.invoke('session:connect', token),
+    disconnect: () => ipcRenderer.invoke('session:disconnect')
+  },
+  /** Incoming role: someone is connecting to this machine. */
   host: {
-    start: () => ipcRenderer.invoke('host:start'),
-    stop: () => ipcRenderer.invoke('host:stop'),
     signal: (msg: SignalMessage) => ipcRenderer.invoke('host:signal', msg),
     onClientJoined: (cb: (p: unknown) => void) => on('host:client-joined', cb),
     onClientLeft: (cb: (p: unknown) => void) => on('host:client-left', cb),
     onSignal: (cb: (p: unknown) => void) => on('host:signal', cb)
   },
+  /** Outgoing role: this machine is viewing someone else. */
   client: {
-    discover: () => ipcRenderer.invoke('client:discover'),
-    connect: (args: { address: string; port: number; pin: string }) =>
-      ipcRenderer.invoke('client:connect', args),
-    disconnect: () => ipcRenderer.invoke('client:disconnect'),
     signal: (msg: SignalMessage) => ipcRenderer.invoke('client:signal', msg),
     onConnected: (cb: (p: unknown) => void) => on('client:connected', cb),
     onClosed: (cb: (p: unknown) => void) => on('client:closed', cb),

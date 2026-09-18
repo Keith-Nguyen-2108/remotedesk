@@ -12,7 +12,8 @@ import { CLOSE_AUTH_FAILED, CLOSE_BAD_VERSION, CLOSE_BUSY, CLOSE_REJECTED } from
 export interface SignalingClientOptions {
   host: string
   port: number
-  pin: string
+  /** The partner machine's ID, which doubles as the shared secret. */
+  secret: string
   clientName: string
   onConnected: (hostName: string) => void
   onMessage: (msg: SignalMessage) => void
@@ -23,7 +24,7 @@ function describeClose(code: number, reason: string): string {
   if (reason) return reason
   switch (code) {
     case CLOSE_AUTH_FAILED:
-      return 'wrong pin or auth timeout'
+      return 'the partner rejected this ID, or timed out'
     case CLOSE_BUSY:
       return 'the host already has a client connected'
     case CLOSE_BAD_VERSION:
@@ -68,7 +69,7 @@ export class SignalingClient {
           ws.send(
             JSON.stringify({
               t: 'auth',
-              proof: computeProof(this.opts.pin, msg.challenge),
+              proof: computeProof(this.opts.secret, msg.challenge),
               clientName: this.opts.clientName,
               version: PROTOCOL_VERSION
             } satisfies SignalMessage)

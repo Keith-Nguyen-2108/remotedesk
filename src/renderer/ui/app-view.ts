@@ -1,0 +1,248 @@
+import { ClientSession } from '../rtc/client-session'
+import { HostSession } from '../rtc/host-session'
+import { PermissionGate } from './permission-gate'
+import { RemoteScreen } from './remote-screen'
+import { TransferPanel } from './transfer-panel'
+
+interface Identity {
+  token: string
+  formatted: string
+  machineName: string
+  platform: string
+}
+
+interface ScreenChoice {
+  id: string
+  name: string
+  thumbnailDataUrl: string
+}
+
+/**
+ * One screen for both directions: this machine always shows its own ID and is
+ * always reachable, and the same screen takes a partner's ID to connect out.
+ */
+export function createAppView(): HTMLElement {
+  const root = document.createElement('div')
+  root.className = 'app'
+  root.innerHTML = `
+    <section class="card" id="identity-card">
+      <h2>Your ID</h2>
+      <p class="hint">Send this to the other machine. It stays the same until you regenerate it.</p>
+      <div class="row id-row">
+        <code class="token" id="my-token">---- ---- ----</code>
+        <button id="copy-id">Copy</button>
+        <button id="regen-id" class="secondary">Regenerate</button>
+        <span class="copied" id="copied-flag" hidden>copied</span>
+      </div>
+      <p class="status" id="listen-status">starting...</p>
+    </section>
+
+    <section class="card">
+      <h2>Connect to a machine</h2>
+      <p class="hint">Paste the ID the other machine is showing.</p>
+      <div class="row">
+        <input id="peer-token" placeholder="1234 5678 9012" autocomplete="off" spellcheck="false" />
+        <button id="connect">Connect</button>
+        <button id="disconnect" class="secondary" disabled>Disconnect</button>
+      </div>
+      <label class="row">
+        <input type="checkbox" id="take-control" disabled />
+        Take control of their mouse and keyboard
+      </label>
+      <p class="status" id="session-status">idle</p>
+    </section>
+
+    <section class="card" id="sharing-card">
+      <h2>When someone connects to you</h2>
+      <label class="row">Share screen <select id="screen-select"></select></label>
+      <label class="row">
+        <input type="checkbox" id="allow-control" checked />
+        Let them control my mouse and keyboard
+      </label>
+      <p class="status" id="incoming-status">nobody connected</p>
+    </section>
+  `
+
+  const tokenEl = root.querySelector<HTMLElement>('#my-token')!
+  const copyBtn = root.querySelector<HTMLButtonElement>('#copy-id')!
+  const regenBtn = root.querySelector<HTMLButtonElement>('#regen-id')!
+  const copiedFlag = root.querySelector<HTMLElement>('#copied-flag')!
+  const listenStatus = root.querySelector<HTMLElement>('#listen-status')!
+  const peerInput = root.querySelector<HTMLInputElement>('#peer-token')!
+  const connectBtn = root.querySelector<HTMLButtonElement>('#connect')!
+  const disconnectBtn = root.querySelector<HTMLButtonElement>('#disconnect')!
+  const takeControl = root.querySelector<HTMLInputElement>('#take-control')!
+  const sessionStatus = root.querySelector<HTMLElement>('#session-status')!
+  const screenSelect = root.querySelector<HTMLSelectElement>('#screen-select')!
+  const allowControl = root.querySelector<HTMLInputElement>('#allow-control')!
+  const incomingStatus = root.querySelector<HTMLElement>('#incoming-status')!
+  const sharingCard = root.querySelector<HTMLElement>('#sharing-card')!
+
+  let transfer: TransferPanel | null = null
+
+  const setSessionStatus = (text: string): void => {
+    sessionStatus.textContent = text
+  }
+  const setIncomingStatus = (text: string): void => {
+    incomingStatus.textContent = text
+  }
+
+  // --- outgoing: we are viewing them ---
+  const clientSession = new ClientSession({
+    onStatus: setSessionStatus,
+    onStream: (stream) => {
+      screen.setStream(stream)
+      screen.el.hidden = false
+      takeControl.disabled = false
+    },
+    onCtrlMessage: (raw) => transfer?.handleCtrl(raw),
+    onFileChunk: (chunk) => transfer?.handleChunk(chunk)
+  })
+
+  const screen = new RemoteScreen({ send: (msg) => clientSession.sendInput(msg) })
+  screen.el.hidden = true
+
+  // --- incoming: they are viewing us ---
+  const hostSession = new HostSession({
+    onStatus: setIncomingStatus,
+    onInputMessage: (raw) => void window.rd.input.apply(raw),
+    onCtrlMessage: (raw) => transfer?.handleCtrl(raw),
+    onFileChunk: (chunk) => transfer?.handleChunk(chunk)
+  })
+
+  /** Only one session is live at a time, so file/link/clipboard traffic follows it. */
+  const activeChannels = (): { ctrl?: RTCDataChannel; file?: RTCDataChannel } => {
+    const outCtrl = clientSession.channel('ctrl')
+    if (outCtrl) return { ctrl: outCtrl, file: clientSession.channel('file') }
+    return { ctrl: hostSession.channel('ctrl'), file: hostSession.channel('file') }
+  }
+
+  transfer = new TransferPanel({ channels: activeChannels })
+
+  const gate = new PermissionGate((ready) => {
+    sharingCard.classList.toggle('blocked', !ready)
+  })
+
+  root.querySelector<HTMLElement>('#identity-card')!.after(gate.el)
+  root.append(screen.el, transfer.el)
+  gate.start()
+
+  // --- identity ---
+  void window.rd.identity.get().then((value) => {
+    const id = value as Identity
+    tokenEl.textContent = id.formatted
+    listenStatus.textContent = `${id.machineName} (${id.platform}) - reachable on this network`
+  })
+
+  copyBtn.onclick = async () => {
+    await window.rd.identity.copy()
+    copiedFlag.hidden = false
+    setTimeout(() => {
+      copiedFlag.hidden = true
+    }, 1500)
+  }
+
+  regenBtn.onclick = async () => {
+    const value = (await window.rd.identity.regenerate()) as { formatted: string }
+    tokenEl.textContent = value.formatted
+    listenStatus.textContent = 'new ID - anyone holding the old one can no longer connect'
+  }
+
+  // --- screens ---
+  void window.rd.screens.list().then((value) => {
+    const list = value as ScreenChoice[]
+    screenSelect.innerHTML = list.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')
+    if (list[0]) void window.rd.screens.select(list[0].id)
+  })
+  screenSelect.onchange = () => void window.rd.screens.select(screenSelect.value)
+
+  allowControl.onchange = () => void window.rd.input.setEnabled(allowControl.checked)
+  takeControl.onchange = () => screen.setControlEnabled(takeControl.checked)
+
+  // --- connecting out ---
+  const resetOutgoing = (reason: string): void => {
+    clientSession.stop()
+    screen.clear()
+    screen.el.hidden = true
+    transfer?.reset()
+    takeControl.checked = false
+    takeControl.disabled = true
+    void window.rd.clipboard.watch(false)
+    setSessionStatus(reason)
+    disconnectBtn.disabled = true
+    connectBtn.disabled = false
+  }
+
+  connectBtn.onclick = async () => {
+    connectBtn.disabled = true
+    setSessionStatus('looking for that ID on the network...')
+    try {
+      const result = (await window.rd.session.connect(peerInput.value)) as {
+        hostName: string
+        address: string
+      }
+      setSessionStatus(`found ${result.hostName} (${result.address}) - waiting for them to allow`)
+      disconnectBtn.disabled = false
+    } catch (err) {
+      setSessionStatus((err as Error).message)
+      connectBtn.disabled = false
+    }
+  }
+
+  disconnectBtn.onclick = async () => {
+    await window.rd.session.disconnect()
+    resetOutgoing('idle')
+  }
+
+  window.rd.client.onConnected((payload) => {
+    const { hostName } = payload as { hostName: string }
+    setSessionStatus(`connected to ${hostName} - waiting for their screen`)
+    void window.rd.clipboard.watch(true)
+  })
+
+  window.rd.client.onClosed((payload) => {
+    const { reason } = payload as { reason: string }
+    resetOutgoing(`disconnected: ${reason}`)
+  })
+
+  window.rd.client.onSignal((msg) => void clientSession.handleSignal(msg))
+
+  // --- being connected to ---
+  window.rd.host.onClientJoined(async (payload) => {
+    const { clientName } = payload as { clientName: string }
+    setIncomingStatus(`${clientName} connected - sharing screen`)
+    try {
+      await hostSession.start()
+      await window.rd.input.setEnabled(allowControl.checked)
+      await window.rd.clipboard.watch(true)
+    } catch (err) {
+      setIncomingStatus(`could not share the screen: ${(err as Error).message}`)
+    }
+  })
+
+  window.rd.host.onClientLeft(() => {
+    hostSession.stop()
+    transfer?.reset()
+    void window.rd.clipboard.watch(false)
+    setIncomingStatus('nobody connected')
+  })
+
+  window.rd.host.onSignal((msg) => void hostSession.handleSignal(msg))
+
+  // Local clipboard changes go out on whichever session is live; incoming ones
+  // are applied by TransferPanel.handleCtrl.
+  window.rd.clipboard.onLocalChange((snapshot) => {
+    const ctrl = activeChannels().ctrl
+    if (ctrl?.readyState !== 'open') return
+    const snap = snapshot as { kind: 'text'; text: string } | { kind: 'image'; dataUrl: string }
+    ctrl.send(
+      JSON.stringify(
+        snap.kind === 'text'
+          ? { t: 'clip-text', text: snap.text }
+          : { t: 'clip-image', dataUrl: snap.dataUrl }
+      )
+    )
+  })
+
+  return root
+}

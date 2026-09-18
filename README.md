@@ -33,43 +33,49 @@ UAC-elevated windows unless RemoteDesk itself runs as administrator.
 
 ## Use
 
-On the machine you want to control:
+Both machines run the same screen and do the same two things.
 
-1. Open the **Share this machine** tab.
-2. Pick a screen and press **Start sharing**.
-3. Read the 6-digit PIN. It is regenerated every time you start sharing.
+**1. Swap IDs.** Each machine shows its own 12-digit **ID** at the top, e.g.
+`4821 0937 5566`. Press **Copy** and send it to the other person however you like —
+chat, email, a phone photo. The ID is stable across restarts; press **Regenerate**
+to mint a new one, which instantly stops anyone holding the old one from connecting.
 
-On the machine you are controlling from:
+**2. Paste and connect.** Put the partner's ID into *Connect to a machine* and press
+**Connect**. Their machine shows an **Allow / Deny** dialog naming yours. Once they
+allow, their screen appears. Tick **Take control of their mouse and keyboard** and
+click into the video to drive it.
 
-1. Open the **Control a machine** tab.
-2. Press **Scan LAN** and pick the host, or type its IP address and port 45789.
-3. Enter the PIN and press **Connect**.
-4. The host gets an *Allow / Deny* dialog naming your machine.
-5. Tick **Take control of mouse and keyboard**, then click into the video.
+There is no separate "host mode" to start: every machine listens from the moment it
+opens, so whoever has your ID can reach you. The *When someone connects to you*
+section picks which screen you share and can revoke their mouse and keyboard at any
+time while still showing your screen.
 
-The host can untick **Allow this client to control my mouse and keyboard** at any point
-to revoke control while still sharing the screen.
-
-**Files and images** — drag onto the drop zone on either side; the receiver picks where
-to save. **Links** — paste a URL and press *Send link*; the other machine asks before
-opening it. **Clipboard** — copying on either machine updates the other automatically.
+**Files and images** — drag onto the drop zone; the receiver picks where to save.
+**Links** — paste a URL and press *Send link*; the other machine asks before opening
+it. **Clipboard** — copying on either machine updates the other automatically.
 
 ## Network requirements
 
 - Both machines on the same subnet.
-- On the host: TCP 45789 (signaling) and UDP 45790 (discovery) reachable.
+- UDP 45790 (ID lookup) and TCP 45789 (signaling) reachable.
 - WebRTC negotiates its own UDP ports for the video and data streams.
 
-Guest and corporate Wi-Fi often isolate clients from each other. If **Scan LAN** finds
-nothing, type the host's IP manually, or test over a phone hotspot.
+Guest and corporate Wi-Fi often isolate clients from each other, which stops the ID
+lookup from reaching anyone. If Connect reports that nobody answered, test the two
+machines over a phone hotspot.
 
 ## Security model
 
-- The PIN is never transmitted. The client proves it knows the PIN with an HMAC-SHA256
-  challenge–response, and the challenge is freshly random per attempt, so a listener
-  learns nothing reusable.
+- **The ID is the secret, and it never travels.** Looking up an ID broadcasts
+  `HMAC-SHA256(id, nonce)` with a fresh random nonce, so only the machine that
+  already holds that ID can recognise the request — everyone else stays silent, and
+  a sniffer on the LAN learns nothing reusable. The signalling handshake then proves
+  knowledge of the ID the same way. At no point is the ID itself put on the wire.
+- Regenerating an ID takes effect immediately, including for a lookup that has
+  already resolved but not yet connected.
 - Screen video and all three data channels are encrypted by WebRTC (DTLS-SRTP).
-- One client at a time, and the host approves each session by hand.
+- One connection at a time, and the receiving machine approves each one by hand:
+  knowing the ID gets you as far as the dialog, not onto the desktop.
 - Incoming links are restricted to `http`/`https`, rejected if they carry embedded
   credentials, and always confirmed in a dialog before opening.
 - Received files are written only through a Save dialog, and the proposed filename is
@@ -84,7 +90,7 @@ nothing, type the host's IP manually, or test over a phone hotspot.
 ```bash
 npm install
 npm run dev        # run the app with hot reload
-npm test           # 102 unit and integration tests
+npm test           # 115 unit and integration tests
 npm run typecheck
 npm run dist:mac   # builds both arm64 and x64 .dmg
 npm run dist:win   # builds the .exe
@@ -108,7 +114,7 @@ The `.exe` produced this way has not been exercised on real Windows hardware. Th
 | `src/main/` | Electron main — signaling server/client, UDP discovery, nut.js injection, capture, permissions, IPC |
 | `src/preload/` | The single `contextBridge` API the renderer may call |
 | `src/renderer/` | UI and the WebRTC sessions |
-| `tests/` | Vitest; `tests/main/signaling.test.ts` and `discovery.test.ts` use real sockets |
+| `tests/` | Vitest; `signaling`, `discovery` and `connect-flow` tests use real sockets |
 
 The implementation plan this was built from is in
 `docs/superpowers/plans/2026-09-18-remotedesk-lan-mvp.md`.

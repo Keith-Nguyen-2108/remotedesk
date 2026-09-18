@@ -18,7 +18,8 @@ export const CLOSE_REJECTED = 4004
 export interface SignalingServerOptions {
   /** 0 picks a free port; production uses DEFAULT_SIGNAL_PORT. */
   port: number
-  pin: string
+  /** Read lazily: regenerating this machine's ID must take effect immediately. */
+  secret: () => string
   hostName: string
   onClientAuthenticated: (clientName: string) => void
   onMessage: (msg: SignalMessage) => void
@@ -100,8 +101,8 @@ export class SignalingServer {
           ws.close(CLOSE_BAD_VERSION, `host speaks v${PROTOCOL_VERSION}`)
           return
         }
-        if (!verifyProof(this.opts.pin, challenge, msg.proof)) {
-          ws.close(CLOSE_AUTH_FAILED, 'wrong pin')
+        if (!verifyProof(this.opts.secret(), challenge, msg.proof)) {
+          ws.close(CLOSE_AUTH_FAILED, 'wrong ID')
           return
         }
 

@@ -1,14 +1,14 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { registerDisplayMediaHandler } from './capture'
-import { registerIpc } from './ipc'
+import { registerIpc, startListening, stopListening } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1100,
-    height: 760,
+    height: 820,
     title: 'RemoteDesk',
     show: false,
     webPreferences: {
@@ -42,14 +42,24 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerDisplayMediaHandler()
   registerIpc()
   createWindow()
+
+  // Listen from launch so a partner holding this machine's ID can reach it.
+  try {
+    await startListening()
+  } catch (err) {
+    console.error('failed to start listening:', (err as Error).message)
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+app.on('before-quit', () => void stopListening())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

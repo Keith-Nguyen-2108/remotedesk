@@ -40,12 +40,12 @@ function nextClose(ws: WebSocket): Promise<number> {
   })
 }
 
-async function startServer(overrides: Partial<{ pin: string }> = {}) {
+async function startServer(overrides: Partial<{ secret: string }> = {}) {
   const received: SignalMessage[] = []
   const authed: string[] = []
   const s = new SignalingServer({
     port: 0,
-    pin: overrides.pin ?? '123456',
+    secret: () => overrides.secret ?? '123456789012',
     hostName: 'TestHost',
     onClientAuthenticated: (name) => authed.push(name),
     onMessage: (msg) => received.push(msg),
@@ -56,14 +56,14 @@ async function startServer(overrides: Partial<{ pin: string }> = {}) {
   return { s, port, received, authed }
 }
 
-async function authenticate(port: number, pin: string, clientName = 'Laptop'): Promise<WebSocket> {
+async function authenticate(port: number, secret: string, clientName = 'Laptop'): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`)
   const challenge = await nextMessage(ws)
   if (challenge.t !== 'challenge') throw new Error('expected challenge')
   ws.send(
     JSON.stringify({
       t: 'auth',
-      proof: computeProof(pin, challenge.challenge),
+      proof: computeProof(secret, challenge.challenge),
       clientName,
       version: PROTOCOL_VERSION
     })
@@ -86,22 +86,22 @@ describe('SignalingServer', () => {
     ws.close()
   })
 
-  it('accepts a client that proves the right pin', async () => {
-    const { port, authed } = await startServer({ pin: '111222' })
-    const ws = await authenticate(port, '111222')
+  it('accepts a client that proves the right ID', async () => {
+    const { port, authed } = await startServer({ secret: '111222333444' })
+    const ws = await authenticate(port, '111222333444')
     expect(authed).toContain('Laptop')
     ws.close()
   })
 
-  it('closes with CLOSE_AUTH_FAILED on a wrong pin', async () => {
-    const { port } = await startServer({ pin: '111222' })
+  it('closes with CLOSE_AUTH_FAILED on a wrong ID', async () => {
+    const { port } = await startServer({ secret: '111222333444' })
     const ws = new WebSocket(`ws://127.0.0.1:${port}`)
     const challenge = await nextMessage(ws)
     if (challenge.t !== 'challenge') throw new Error('expected challenge')
     ws.send(
       JSON.stringify({
         t: 'auth',
-        proof: computeProof('999999', challenge.challenge),
+        proof: computeProof('999999888877', challenge.challenge),
         clientName: 'Attacker',
         version: PROTOCOL_VERSION
       })
@@ -117,7 +117,7 @@ describe('SignalingServer', () => {
     ws.send(
       JSON.stringify({
         t: 'auth',
-        proof: computeProof('123456', challenge.challenge),
+        proof: computeProof('123456789012', challenge.challenge),
         clientName: 'Old',
         version: 99
       })
@@ -136,7 +136,7 @@ describe('SignalingServer', () => {
 
   it('rejects a second client while one is connected', async () => {
     const { port } = await startServer()
-    const first = await authenticate(port, '123456', 'First')
+    const first = await authenticate(port, '123456789012', 'First')
     const second = new WebSocket(`ws://127.0.0.1:${port}`)
     expect(await nextClose(second)).toBe(CLOSE_BUSY)
     first.close()
@@ -144,7 +144,7 @@ describe('SignalingServer', () => {
 
   it('relays client signaling messages to the app and back', async () => {
     const { s, port, received } = await startServer()
-    const ws = await authenticate(port, '123456')
+    const ws = await authenticate(port, '123456789012')
 
     ws.send(JSON.stringify({ t: 'answer', sdp: 'v=0 answer' }))
     await new Promise((r) => setTimeout(r, 100))
@@ -158,7 +158,7 @@ describe('SignalingServer', () => {
 
   it('drops malformed frames without closing an authenticated session', async () => {
     const { port, received } = await startServer()
-    const ws = await authenticate(port, '123456')
+    const ws = await authenticate(port, '123456789012')
 
     ws.send('{not json')
     ws.send(JSON.stringify({ t: 'launch-missiles' }))
@@ -174,12 +174,12 @@ import { SignalingClient } from '../../src/main/signaling-client'
 
 describe('SignalingClient', () => {
   it('completes the handshake against the real server', async () => {
-    const { port, received } = await startServer({ pin: '222333' })
+    const { port, received } = await startServer({ secret: '222333444555' })
     const events: string[] = []
     const client = new SignalingClient({
       host: '127.0.0.1',
       port,
-      pin: '222333',
+      secret: '222333444555',
       clientName: 'Laptop',
       onConnected: (hostName) => events.push(`connected:${hostName}`),
       onMessage: (msg) => events.push(`msg:${msg.t}`),
@@ -196,28 +196,28 @@ describe('SignalingClient', () => {
     await client.close()
   })
 
-  it('rejects connect() when the pin is wrong', async () => {
-    const { port } = await startServer({ pin: '222333' })
+  it('rejects connect() when the ID is wrong', async () => {
+    const { port } = await startServer({ secret: '222333444555' })
     const client = new SignalingClient({
       host: '127.0.0.1',
       port,
-      pin: '000000',
+      secret: '000000111122',
       clientName: 'Laptop',
       onConnected: () => undefined,
       onMessage: () => undefined,
       onClosed: () => undefined
     })
 
-    await expect(client.connect()).rejects.toThrow(/pin|auth/i)
+    await expect(client.connect()).rejects.toThrow(/id|auth|reject/i)
   })
 
   it('surfaces a readable reason when the host is busy', async () => {
-    const { port } = await startServer({ pin: '222333' })
-    const first = await authenticate(port, '222333', 'First')
+    const { port } = await startServer({ secret: '222333444555' })
+    const first = await authenticate(port, '222333444555', 'First')
     const client = new SignalingClient({
       host: '127.0.0.1',
       port,
-      pin: '222333',
+      secret: '222333444555',
       clientName: 'Second',
       onConnected: () => undefined,
       onMessage: () => undefined,

@@ -1,14 +1,15 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { hostname, platform } from 'node:os'
 import { basename, join } from 'node:path'
-import { generatePin } from '../shared/auth'
 import type { ClipSnapshot } from '../shared/clipboard-sync'
+import { formatToken, normalizeToken } from '../shared/identity'
 import { DEFAULT_SIGNAL_PORT, type SignalMessage } from '../shared/protocol'
 import { normalizeExternalUrl } from '../shared/url-guard'
 import { getSelectedScreen, listScreens, setSelectedScreen } from './capture'
 import { ClipboardWatcher } from './clipboard'
-import { DiscoveryResponder, queryHosts, type DiscoveredHost } from './discovery'
+import { DiscoveryResponder, findHostByToken } from './discovery'
+import { getToken, regenerateToken } from './identity'
 import { applyInputRaw, isInputEnabled, setInputEnabled } from './input'
 import {
   getPermissionState,
@@ -19,14 +20,9 @@ import {
 import { SignalingClient } from './signaling-client'
 import { SignalingServer } from './signaling-server'
 
-interface HostState {
-  pin: string
-  server: SignalingServer | null
-  responder: DiscoveryResponder | null
-}
-
-const host: HostState = { pin: generatePin(), server: null, responder: null }
-let client: SignalingClient | null = null
+let server: SignalingServer | null = null
+let responder: DiscoveryResponder | null = null
+let outgoing: SignalingClient | null = null
 
 function emit(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -37,10 +33,10 @@ function emit(channel: string, payload: unknown): void {
 const clipboardWatcher = new ClipboardWatcher((snapshot) => emit('clipboard:local', snapshot))
 
 /**
- * A correct PIN proves the caller knows the secret; it does not prove you want
+ * A correct ID proves the caller knows your secret; it does not prove you want
  * them on your desktop right now. Ask, with the window brought forward.
  */
-async function askHostToApprove(clientName: string): Promise<boolean> {
+async function askToApprove(clientName: string): Promise<boolean> {
   const [win] = BrowserWindow.getAllWindows()
   if (!win) return false
   win.show()
@@ -57,88 +53,111 @@ async function askHostToApprove(clientName: string): Promise<boolean> {
   return response === 0
 }
 
-export function registerIpc(): void {
-  ipcMain.handle('app:identity', () => ({
-    machineName: hostname(),
-    platform: platform()
-  }))
+/**
+ * Every machine listens from launch, so a partner who has your ID can reach you
+ * without you doing anything first. Nothing is captured until you approve.
+ */
+export async function startListening(): Promise<number> {
+  await stopListening()
 
+  const s = new SignalingServer({
+    port: DEFAULT_SIGNAL_PORT,
+    secret: getToken,
+    hostName: hostname(),
+    approveClient: askToApprove,
+    onClientAuthenticated: (clientName) => emit('host:client-joined', { clientName }),
+    onMessage: (msg) => emit('host:signal', msg),
+    onClientGone: () => {
+      void setInputEnabled(false)
+      clipboardWatcher.stop()
+      emit('host:client-left', {})
+    }
+  })
+  const port = await s.start()
+
+  const r = new DiscoveryResponder({
+    token: getToken,
+    beacon: () => ({ hostName: hostname(), port, platform: platform() })
+  })
+  await r.start()
+
+  server = s
+  responder = r
+  return port
+}
+
+export async function stopListening(): Promise<void> {
+  await setInputEnabled(false)
+  clipboardWatcher.stop()
+  await server?.stop()
+  await responder?.stop()
+  server = null
+  responder = null
+}
+
+export function registerIpc(): void {
+  // ---- identity ----
+  ipcMain.handle('identity:get', () => {
+    const token = getToken()
+    return {
+      token,
+      formatted: formatToken(token),
+      machineName: hostname(),
+      platform: platform()
+    }
+  })
+
+  ipcMain.handle('identity:regenerate', () => {
+    const token = regenerateToken()
+    return { token, formatted: formatToken(token) }
+  })
+
+  ipcMain.handle('identity:copy', () => {
+    clipboard.writeText(formatToken(getToken()))
+    return { copied: true as const }
+  })
+
+  // ---- screens ----
   ipcMain.handle('screens:list', () => listScreens())
   ipcMain.handle('screens:select', (_e, id: string) => {
     setSelectedScreen(id)
     return getSelectedScreen()
   })
 
-  // ---- host role ----
-  ipcMain.handle('host:start', async () => {
-    const permissions = getPermissionState()
-    if (!permissions.ready) {
-      throw new Error(
-        'grant Screen Recording and Accessibility to RemoteDesk, then relaunch the app'
-      )
+  // ---- connecting out, by the partner's ID ----
+  ipcMain.handle('session:connect', async (_e, rawToken: string) => {
+    const token = normalizeToken(rawToken)
+    if (!token) throw new Error('that ID is not 12 digits')
+    if (token === getToken()) throw new Error('that is this machine\'s own ID')
+
+    const found = await findHostByToken(token)
+    if (!found) {
+      throw new Error('no machine with that ID answered on this network')
     }
 
-    await stopHost()
-    host.pin = generatePin()
-    const server = new SignalingServer({
-      port: DEFAULT_SIGNAL_PORT,
-      pin: host.pin,
-      hostName: hostname(),
-      approveClient: askHostToApprove,
-      onClientAuthenticated: (clientName) => emit('host:client-joined', { clientName }),
-      onMessage: (msg) => emit('host:signal', msg),
-      onClientGone: () => {
-        void setInputEnabled(false)
-        clipboardWatcher.stop()
-        emit('host:client-left', {})
-      }
+    await outgoing?.close()
+    const c = new SignalingClient({
+      host: found.address,
+      port: found.port,
+      secret: token,
+      clientName: hostname(),
+      onConnected: (hostName) => emit('client:connected', { hostName, address: found.address }),
+      onMessage: (msg) => emit('client:signal', msg),
+      onClosed: (code, reason) => emit('client:closed', { code, reason })
     })
-    const port = await server.start()
-    const responder = new DiscoveryResponder({
-      beacon: () => ({ hostName: hostname(), port, platform: platform() })
-    })
-    await responder.start()
-    host.server = server
-    host.responder = responder
-    return { pin: host.pin, port }
+    await c.connect()
+    outgoing = c
+    return { hostName: found.hostName, address: found.address }
   })
 
-  ipcMain.handle('host:stop', () => stopHost())
-  ipcMain.handle('host:signal', (_e, msg: SignalMessage) => {
-    host.server?.send(msg)
-  })
-
-  // ---- client role ----
-  ipcMain.handle('client:discover', (): Promise<DiscoveredHost[]> => queryHosts())
-
-  ipcMain.handle(
-    'client:connect',
-    async (_e, args: { address: string; port: number; pin: string }) => {
-      await client?.close()
-      const c = new SignalingClient({
-        host: args.address,
-        port: args.port,
-        pin: args.pin,
-        clientName: hostname(),
-        onConnected: (hostName) => emit('client:connected', { hostName }),
-        onMessage: (msg) => emit('client:signal', msg),
-        onClosed: (code, reason) => emit('client:closed', { code, reason })
-      })
-      await c.connect()
-      client = c
-      return { ok: true as const }
-    }
-  )
-
-  ipcMain.handle('client:disconnect', async () => {
-    await client?.close()
-    client = null
+  ipcMain.handle('session:disconnect', async () => {
+    await outgoing?.close()
+    outgoing = null
     clipboardWatcher.stop()
   })
 
-  ipcMain.handle('client:signal', (_e, msg: SignalMessage) => {
-    client?.send(msg)
-  })
+  ipcMain.handle('host:signal', (_e, msg: SignalMessage) => server?.send(msg))
+  ipcMain.handle('client:signal', (_e, msg: SignalMessage) => outgoing?.send(msg))
 
   // ---- input injection ----
   ipcMain.handle('input:apply', (_e, raw: string) => applyInputRaw(raw))
@@ -194,13 +213,4 @@ export function registerIpc(): void {
     await shell.openExternal(safe)
     return { opened: true as const, url: safe }
   })
-}
-
-async function stopHost(): Promise<void> {
-  await setInputEnabled(false)
-  clipboardWatcher.stop()
-  await host.server?.stop()
-  await host.responder?.stop()
-  host.server = null
-  host.responder = null
 }

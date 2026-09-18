@@ -1,18 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeProof, generateChallenge, generatePin, verifyProof } from '../../src/shared/auth'
-
-describe('generatePin', () => {
-  it('always returns exactly six digits', () => {
-    for (let i = 0; i < 200; i++) {
-      expect(generatePin()).toMatch(/^\d{6}$/)
-    }
-  })
-
-  it('is not constant', () => {
-    const seen = new Set(Array.from({ length: 50 }, () => generatePin()))
-    expect(seen.size).toBeGreaterThan(1)
-  })
-})
+import { computeProof, generateChallenge, verifyProof } from '../../src/shared/auth'
 
 describe('generateChallenge', () => {
   it('returns 64 hex characters and never repeats', () => {
@@ -34,7 +21,7 @@ describe('computeProof / verifyProof', () => {
     expect(verifyProof('123456', c, computeProof('123456', c))).toBe(true)
   })
 
-  it('rejects a proof made with the wrong pin', () => {
+  it('rejects a proof made with the wrong secret', () => {
     const c = generateChallenge()
     expect(verifyProof('123456', c, computeProof('654321', c))).toBe(false)
   })
