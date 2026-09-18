@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { FILE_CHUNK_SIZE } from '../../src/shared/protocol'
-import { FileReassembler, chunkBuffer, sha256Hex } from '../../src/shared/filechunk'
+import { FileReassembler, chunkBuffer, sha256Hex, type Bytes } from '../../src/shared/filechunk'
 
-function makeBytes(n: number): Uint8Array {
+function makeBytes(n: number): Bytes {
   const out = new Uint8Array(n)
   for (let i = 0; i < n; i++) out[i] = i % 256
   return out

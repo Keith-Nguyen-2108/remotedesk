@@ -1,4 +1,4 @@
-import { parseSignalMessage } from '../../shared/protocol'
+import { parseSignalMessage, type InputMessage } from '../../shared/protocol'
 import { addIceCandidate, createPeer, type PeerHandles } from './peer'
 
 export interface ClientSessionCallbacks {
@@ -54,6 +54,12 @@ export class ClientSession {
     }
 
     if (msg.t === 'ice' && this.peer) addIceCandidate(this.peer.pc, msg.candidate)
+  }
+
+  /** Input is the latency-critical path, so it gets its own channel. */
+  sendInput(msg: InputMessage): void {
+    const ch = this.peer?.channels.input
+    if (ch?.readyState === 'open') ch.send(JSON.stringify(msg))
   }
 
   channel(name: 'input' | 'ctrl' | 'file'): RTCDataChannel | undefined {
