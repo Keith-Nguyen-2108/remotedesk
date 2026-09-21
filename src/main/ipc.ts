@@ -137,8 +137,8 @@ export function registerIpc(): void {
     return { token, formatted: formatToken(token) }
   })
 
-  ipcMain.handle('identity:copy', () => {
-    clipboard.writeText(formatToken(getToken()))
+  ipcMain.handle('identity:copy', async () => {
+    await clipboard.writeText(formatToken(getToken()))
     return { copied: true as const }
   })
 
@@ -235,9 +235,9 @@ export function registerIpc(): void {
     if (value) clipboardWatcher.start()
     else clipboardWatcher.stop()
   })
-  ipcMain.handle('clipboard:apply-remote', (_e, snapshot: ClipSnapshot) => {
+  ipcMain.handle('clipboard:apply-remote', (_e, snapshot: ClipSnapshot) =>
     clipboardWatcher.applyRemote(snapshot)
-  })
+  )
 
   // ---- permissions ----
   ipcMain.handle('permissions:get', () => getPermissionState())

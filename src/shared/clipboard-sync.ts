@@ -1,8 +1,8 @@
 export type ClipSnapshot = { kind: 'text'; text: string } | { kind: 'image'; dataUrl: string }
 
 export interface ClipboardPort {
-  read: () => ClipSnapshot | null
-  write: (snapshot: ClipSnapshot) => void
+  read: () => Promise<ClipSnapshot | null>
+  write: (snapshot: ClipSnapshot) => Promise<void>
   maxTextLength?: number
 }
 
@@ -26,9 +26,19 @@ export class ClipboardSync {
 
   constructor(private readonly port: ClipboardPort) {}
 
-  /** Call on a timer. Returns the snapshot to send, or null if there is nothing new. */
-  poll(): ClipSnapshot | null {
-    const snapshot = this.port.read()
+  /**
+   * Call on a timer. Returns the snapshot to send, or null if there is nothing
+   * new. Never throws: a flaky read (the OS clipboard can genuinely fail to
+   * respond) just means "nothing to report this tick" rather than taking down
+   * whatever loop is driving the poll.
+   */
+  async poll(): Promise<ClipSnapshot | null> {
+    let snapshot: ClipSnapshot | null
+    try {
+      snapshot = await this.port.read()
+    } catch {
+      return null
+    }
     if (!snapshot) return null
 
     const print = fingerprint(snapshot)
@@ -50,9 +60,9 @@ export class ClipboardSync {
   }
 
   /** Write a peer's clipboard locally and suppress the echo. */
-  applyRemote(snapshot: ClipSnapshot): void {
+  async applyRemote(snapshot: ClipSnapshot): Promise<void> {
     this.lastSeen = fingerprint(snapshot)
     this.primed = true
-    this.port.write(snapshot)
+    await this.port.write(snapshot)
   }
 }
