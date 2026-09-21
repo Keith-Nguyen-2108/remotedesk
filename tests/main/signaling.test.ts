@@ -177,8 +177,6 @@ describe('SignalingClient', () => {
     const { port, received } = await startServer({ secret: '222333444555' })
     const events: string[] = []
     const client = new SignalingClient({
-      host: '127.0.0.1',
-      port,
       secret: '222333444555',
       clientName: 'Laptop',
       onConnected: (hostName) => events.push(`connected:${hostName}`),
@@ -186,7 +184,7 @@ describe('SignalingClient', () => {
       onClosed: (code) => events.push(`closed:${code}`)
     })
 
-    await client.connect()
+    await client.connect('127.0.0.1', port)
     expect(events).toContain('connected:TestHost')
 
     client.send({ t: 'answer', sdp: 'v=0 from client' })
@@ -199,8 +197,6 @@ describe('SignalingClient', () => {
   it('rejects connect() when the ID is wrong', async () => {
     const { port } = await startServer({ secret: '222333444555' })
     const client = new SignalingClient({
-      host: '127.0.0.1',
-      port,
       secret: '000000111122',
       clientName: 'Laptop',
       onConnected: () => undefined,
@@ -208,15 +204,13 @@ describe('SignalingClient', () => {
       onClosed: () => undefined
     })
 
-    await expect(client.connect()).rejects.toThrow(/id|auth|reject/i)
+    await expect(client.connect('127.0.0.1', port)).rejects.toThrow(/id|auth|reject/i)
   })
 
   it('surfaces a readable reason when the host is busy', async () => {
     const { port } = await startServer({ secret: '222333444555' })
     const first = await authenticate(port, '222333444555', 'First')
     const client = new SignalingClient({
-      host: '127.0.0.1',
-      port,
       secret: '222333444555',
       clientName: 'Second',
       onConnected: () => undefined,
@@ -224,7 +218,7 @@ describe('SignalingClient', () => {
       onClosed: () => undefined
     })
 
-    await expect(client.connect()).rejects.toThrow(/already has a client|client is connected/i)
+    await expect(client.connect('127.0.0.1', port)).rejects.toThrow(/already has a client|client is connected/i)
     first.close()
   })
 })

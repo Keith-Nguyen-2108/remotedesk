@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto'
+import { createHash, randomInt } from 'node:crypto'
 
 export const TOKEN_DIGITS = 12
 
@@ -34,4 +34,14 @@ export function normalizeToken(input: string): string | null {
 
 export function isValidToken(input: string): boolean {
   return normalizeToken(input) !== null
+}
+
+/**
+ * A stable, one-way routing key derived from a token. Safe to hand to a
+ * rendezvous server: it lets the server match "who wants X" with "X is
+ * online" without ever learning the token itself, which stays the real
+ * secret proved via HMAC challenge-response once two machines are paired.
+ */
+export function tokenRoutingKey(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
 }

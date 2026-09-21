@@ -41,6 +41,25 @@ export function createAppView(): HTMLElement {
         </section>
 
         <section class="card">
+          <h2>Internet (optional)</h2>
+          <p class="hint">
+            LAN connections always try first. Add a relay server so you can also
+            connect from anywhere - a different city, a different country -
+            with no port forwarding on either end.
+          </p>
+          <div class="row">
+            <input
+              id="relay-url"
+              placeholder="wss://relay.example.com"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button id="relay-save">Save</button>
+          </div>
+          <p class="status" id="relay-status">not configured - LAN only</p>
+        </section>
+
+        <section class="card">
           <h2>Connect to a machine</h2>
           <p class="hint">Paste the ID the other machine is showing.</p>
           <div class="row">
@@ -74,6 +93,9 @@ export function createAppView(): HTMLElement {
   const regenBtn = root.querySelector<HTMLButtonElement>('#regen-id')!
   const copiedFlag = root.querySelector<HTMLElement>('#copied-flag')!
   const listenStatus = root.querySelector<HTMLElement>('#listen-status')!
+  const relayUrlInput = root.querySelector<HTMLInputElement>('#relay-url')!
+  const relaySaveBtn = root.querySelector<HTMLButtonElement>('#relay-save')!
+  const relayStatus = root.querySelector<HTMLElement>('#relay-status')!
   const peerInput = root.querySelector<HTMLInputElement>('#peer-token')!
   const connectBtn = root.querySelector<HTMLButtonElement>('#connect')!
   const disconnectBtn = root.querySelector<HTMLButtonElement>('#disconnect')!
@@ -164,6 +186,33 @@ export function createAppView(): HTMLElement {
     listenStatus.textContent = 'new ID - anyone holding the old one can no longer connect'
   }
 
+  // --- internet relay (optional) ---
+  void window.rd.relay.get().then((value) => {
+    const { url } = value as { url: string | null }
+    if (url) {
+      relayUrlInput.value = url
+      relayStatus.textContent = `configured: ${url}`
+    }
+  })
+
+  relaySaveBtn.onclick = async () => {
+    relaySaveBtn.disabled = true
+    const url = relayUrlInput.value.trim() || null
+    try {
+      const result = (await window.rd.relay.set(url)) as { url: string | null }
+      relayStatus.textContent = result.url
+        ? `configured: ${result.url} - connecting...`
+        : 'not configured - LAN only'
+    } finally {
+      relaySaveBtn.disabled = false
+    }
+  }
+
+  window.rd.relay.onStatus((payload) => {
+    const { text } = payload as { text: string }
+    relayStatus.textContent = relayUrlInput.value.trim() ? text : 'not configured - LAN only'
+  })
+
   // --- screens ---
   void window.rd.screens.list().then((value) => {
     const list = value as ScreenChoice[]
@@ -196,8 +245,10 @@ export function createAppView(): HTMLElement {
       const result = (await window.rd.session.connect(peerInput.value)) as {
         hostName: string
         address: string
+        via: 'lan' | 'relay'
       }
-      setSessionStatus(`found ${result.hostName} (${result.address}) - waiting for them to allow`)
+      const via = result.via === 'relay' ? 'over the internet relay' : `on the LAN (${result.address})`
+      setSessionStatus(`found ${result.hostName} ${via} - waiting for them to allow`)
       disconnectBtn.disabled = false
     } catch (err) {
       setSessionStatus((err as Error).message)

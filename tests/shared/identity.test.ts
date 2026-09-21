@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { formatToken, generateToken, isValidToken, normalizeToken } from '../../src/shared/identity'
+import {
+  formatToken,
+  generateToken,
+  isValidToken,
+  normalizeToken,
+  tokenRoutingKey
+} from '../../src/shared/identity'
 
 describe('generateToken', () => {
   it('always returns exactly twelve digits', () => {
@@ -55,5 +61,21 @@ describe('isValidToken', () => {
   it('agrees with normalizeToken', () => {
     expect(isValidToken('123456789012')).toBe(true)
     expect(isValidToken('nope')).toBe(false)
+  })
+})
+
+describe('tokenRoutingKey', () => {
+  it('is deterministic', () => {
+    expect(tokenRoutingKey('123456789012')).toBe(tokenRoutingKey('123456789012'))
+  })
+
+  it('differs for different tokens', () => {
+    expect(tokenRoutingKey('123456789012')).not.toBe(tokenRoutingKey('999988887777'))
+  })
+
+  it('is a 64-character hex digest, not the token itself', () => {
+    const key = tokenRoutingKey('123456789012')
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(key).not.toContain('123456789012')
   })
 })

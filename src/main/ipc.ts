@@ -18,12 +18,18 @@ import {
   openScreenRecordingSettings,
   promptAccessibility
 } from './permissions'
+import { connectViaRelay, RelayListener } from './relay-transport'
+import { getRelayUrl, setRelayUrl } from './settings'
 import { SignalingClient } from './signaling-client'
 import { SignalingServer } from './signaling-server'
 
 let server: SignalingServer | null = null
 let responder: DiscoveryResponder | null = null
+let relayListener: RelayListener | null = null
 let outgoing: SignalingClient | null = null
+
+/** How long to wait for a LAN answer before trying the internet relay. */
+const LAN_LOOKUP_TIMEOUT_MS = 1800
 
 function emit(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -55,8 +61,11 @@ async function askToApprove(clientName: string): Promise<boolean> {
 }
 
 /**
- * Every machine listens from launch, so a partner who has your ID can reach you
- * without you doing anything first. Nothing is captured until you approve.
+ * Every machine listens from launch, so a partner who has your ID can reach
+ * you without you doing anything first. Nothing is captured until you
+ * approve. LAN discovery always runs; the internet relay also runs whenever
+ * a relay URL is configured, feeding paired connections into the very same
+ * SignalingServer so "one session at a time" holds across both transports.
  */
 export async function startListening(): Promise<number> {
   await stopListening()
@@ -84,6 +93,19 @@ export async function startListening(): Promise<number> {
 
   server = s
   responder = r
+
+  const relayUrl = getRelayUrl()
+  if (relayUrl) {
+    const listener = new RelayListener({
+      url: relayUrl,
+      token: getToken,
+      onInbound: (conn) => s.handleExternalConnection(conn),
+      onStatus: (text) => emit('relay:status', { text })
+    })
+    listener.start()
+    relayListener = listener
+  }
+
   return port
 }
 
@@ -92,8 +114,10 @@ export async function stopListening(): Promise<void> {
   clipboardWatcher.stop()
   await server?.stop()
   await responder?.stop()
+  relayListener?.stop()
   server = null
   responder = null
+  relayListener = null
 }
 
 export function registerIpc(): void {
@@ -118,6 +142,16 @@ export function registerIpc(): void {
     return { copied: true as const }
   })
 
+  // ---- internet relay settings ----
+  ipcMain.handle('relay:get', () => ({ url: getRelayUrl() }))
+  ipcMain.handle('relay:set', async (_e, url: string | null) => {
+    setRelayUrl(url)
+    // Re-applies immediately: restart listening so the relay connection
+    // starts or stops without requiring the user to relaunch the app.
+    await startListening()
+    return { url: getRelayUrl() }
+  })
+
   // ---- screens ----
   ipcMain.handle('screens:list', () => listScreens())
   ipcMain.handle('screens:select', (_e, id: string) => {
@@ -131,24 +165,42 @@ export function registerIpc(): void {
     if (!token) throw new Error('that ID is not 12 digits')
     if (token === getToken()) throw new Error('that is this machine\'s own ID')
 
-    const found = await findHostByToken(token)
-    if (!found) {
-      throw new Error('no machine with that ID answered on this network')
+    await outgoing?.close()
+
+    // LAN first: fast and needs no internet infrastructure when it works.
+    const found = await findHostByToken(token, { timeoutMs: LAN_LOOKUP_TIMEOUT_MS })
+    if (found) {
+      const c = new SignalingClient({
+        secret: token,
+        clientName: hostname(),
+        onConnected: (hostName) => emit('client:connected', { hostName, address: found.address }),
+        onMessage: (msg) => emit('client:signal', msg),
+        onClosed: (code, reason) => emit('client:closed', { code, reason })
+      })
+      await c.connect(found.address, found.port)
+      outgoing = c
+      return { hostName: found.hostName, address: found.address, via: 'lan' as const }
     }
 
-    await outgoing?.close()
+    // Not on this LAN: fall back to the internet relay, if one is configured.
+    const relayUrl = getRelayUrl()
+    if (!relayUrl) {
+      throw new Error(
+        'no machine with that ID answered on this network, and no internet relay is configured'
+      )
+    }
+
+    const conn = await connectViaRelay(relayUrl, token)
     const c = new SignalingClient({
-      host: found.address,
-      port: found.port,
       secret: token,
       clientName: hostname(),
-      onConnected: (hostName) => emit('client:connected', { hostName, address: found.address }),
+      onConnected: (hostName) => emit('client:connected', { hostName, address: 'internet' }),
       onMessage: (msg) => emit('client:signal', msg),
       onClosed: (code, reason) => emit('client:closed', { code, reason })
     })
-    await c.connect()
+    await c.attach(conn)
     outgoing = c
-    return { hostName: found.hostName, address: found.address }
+    return { hostName: 'partner', address: 'internet', via: 'relay' as const }
   })
 
   ipcMain.handle('session:disconnect', async () => {

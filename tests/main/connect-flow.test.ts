@@ -69,8 +69,6 @@ describe('connect by ID', () => {
 
     const events: string[] = []
     client = new SignalingClient({
-      host: found!.address,
-      port: found!.port,
       secret: '123412341234',
       clientName: 'LaptopBox',
       onConnected: (hostName) => events.push(`connected:${hostName}`),
@@ -78,7 +76,7 @@ describe('connect by ID', () => {
       onClosed: () => undefined
     })
 
-    await client.connect()
+    await client.connect(found!.address, found!.port)
 
     expect(events).toEqual(['connected:HostBox'])
     expect(machine.joined).toContain('LaptopBox')
@@ -111,8 +109,6 @@ describe('connect by ID', () => {
     machine.token = '555566667777'
 
     client = new SignalingClient({
-      host: found!.address,
-      port: found!.port,
       secret: '123412341234',
       clientName: 'LaptopBox',
       onConnected: () => undefined,
@@ -120,7 +116,7 @@ describe('connect by ID', () => {
       onClosed: () => undefined
     })
 
-    await expect(client.connect()).rejects.toThrow(/id|reject|auth/i)
+    await expect(client.connect(found!.address, found!.port)).rejects.toThrow(/id|reject|auth/i)
     expect(machine.joined).not.toContain('LaptopBox')
   })
 })

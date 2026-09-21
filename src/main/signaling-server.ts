@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { WebSocket, WebSocketServer } from 'ws'
+import { WebSocketServer } from 'ws'
 import { generateChallenge, verifyProof } from '../shared/auth'
 import {
   AUTH_TIMEOUT_MS,
@@ -9,6 +9,7 @@ import {
   parseSignalMessage,
   type SignalMessage
 } from '../shared/protocol'
+import { wrapWebSocket, type WireConnection } from './wire-socket'
 
 export const CLOSE_AUTH_FAILED = 4001
 export const CLOSE_BUSY = 4002
@@ -28,17 +29,25 @@ export interface SignalingServerOptions {
   approveClient?: (clientName: string) => Promise<boolean>
 }
 
+/**
+ * Accepts inbound sessions for this machine's identity. The LAN transport
+ * (a direct WebSocketServer on the local network) is built in; a second
+ * transport - an internet relay - can feed already-paired connections into
+ * the very same instance via `handleExternalConnection`, so "only one active
+ * session at a time" and the whole auth/approve/relay flow are shared and
+ * behave identically regardless of how the peer found this machine.
+ */
 export class SignalingServer {
   private http: Server | null = null
   private wss: WebSocketServer | null = null
-  private active: WebSocket | null = null
+  private active: WireConnection | null = null
 
   constructor(private readonly opts: SignalingServerOptions) {}
 
   async start(): Promise<number> {
     const http = createServer()
     const wss = new WebSocketServer({ server: http })
-    wss.on('connection', (ws) => this.handleConnection(ws))
+    wss.on('connection', (ws) => this.handleConnection(wrapWebSocket(ws)))
     this.http = http
     this.wss = wss
 
@@ -49,12 +58,17 @@ export class SignalingServer {
     return (http.address() as AddressInfo).port
   }
 
+  /** Entry point for a connection an internet relay has already paired to us. */
+  handleExternalConnection(conn: WireConnection): void {
+    this.handleConnection(conn)
+  }
+
   hasClient(): boolean {
-    return this.active !== null && this.active.readyState === WebSocket.OPEN
+    return this.active !== null && this.active.isOpen
   }
 
   send(msg: SignalMessage): void {
-    if (this.active?.readyState === WebSocket.OPEN) {
+    if (this.active?.isOpen) {
       this.active.send(JSON.stringify(msg))
     }
   }
@@ -76,9 +90,9 @@ export class SignalingServer {
     if (http) await new Promise<void>((resolve) => http.close(() => resolve()))
   }
 
-  private handleConnection(ws: WebSocket): void {
+  private handleConnection(conn: WireConnection): void {
     if (this.hasClient()) {
-      ws.close(CLOSE_BUSY, 'another client is connected')
+      conn.close(CLOSE_BUSY, 'another client is connected')
       return
     }
 
@@ -86,35 +100,35 @@ export class SignalingServer {
     let authed = false
 
     const authTimer = setTimeout(() => {
-      if (!authed) ws.close(CLOSE_AUTH_FAILED, 'auth timeout')
+      if (!authed) conn.close(CLOSE_AUTH_FAILED, 'auth timeout')
     }, AUTH_TIMEOUT_MS)
 
-    ws.on('message', (data) => {
-      const msg = parseSignalMessage(parseJson(data.toString()))
+    conn.onMessage((data) => {
+      const msg = parseSignalMessage(parseJson(data))
 
       if (!authed) {
         if (!msg || msg.t !== 'auth') {
-          ws.close(CLOSE_AUTH_FAILED, 'auth required')
+          conn.close(CLOSE_AUTH_FAILED, 'auth required')
           return
         }
         if (msg.version !== PROTOCOL_VERSION) {
-          ws.close(CLOSE_BAD_VERSION, `host speaks v${PROTOCOL_VERSION}`)
+          conn.close(CLOSE_BAD_VERSION, `host speaks v${PROTOCOL_VERSION}`)
           return
         }
         if (!verifyProof(this.opts.secret(), challenge, msg.proof)) {
-          ws.close(CLOSE_AUTH_FAILED, 'wrong ID')
+          conn.close(CLOSE_AUTH_FAILED, 'wrong ID')
           return
         }
 
         const finish = (approved: boolean): void => {
           if (!approved) {
-            ws.close(CLOSE_REJECTED, 'rejected by host')
+            conn.close(CLOSE_REJECTED, 'rejected by host')
             return
           }
           authed = true
           clearTimeout(authTimer)
-          this.active = ws
-          ws.send(JSON.stringify({ t: 'auth-ok' } satisfies SignalMessage))
+          this.active = conn
+          conn.send(JSON.stringify({ t: 'auth-ok' } satisfies SignalMessage))
           this.opts.onClientAuthenticated(msg.clientName)
         }
 
@@ -132,17 +146,15 @@ export class SignalingServer {
       this.opts.onMessage(msg)
     })
 
-    ws.on('close', () => {
+    conn.onClose(() => {
       clearTimeout(authTimer)
-      if (this.active === ws) {
+      if (this.active === conn) {
         this.active = null
         this.opts.onClientGone()
       }
     })
 
-    ws.on('error', () => ws.close())
-
-    ws.send(
+    conn.send(
       JSON.stringify({
         t: 'challenge',
         challenge,

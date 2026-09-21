@@ -8,10 +8,9 @@ import {
   type SignalMessage
 } from '../shared/protocol'
 import { CLOSE_AUTH_FAILED, CLOSE_BAD_VERSION, CLOSE_BUSY, CLOSE_REJECTED } from './signaling-server'
+import { wrapWebSocket, type WireConnection } from './wire-socket'
 
 export interface SignalingClientOptions {
-  host: string
-  port: number
   /** The partner machine's ID, which doubles as the shared secret. */
   secret: string
   clientName: string
@@ -36,37 +35,47 @@ function describeClose(code: number, reason: string): string {
   }
 }
 
+/**
+ * Authenticates over an already-connected WireConnection. The LAN path opens
+ * a direct WebSocket and wraps it; the internet path hands over a connection
+ * a relay server has already paired with the target machine. Either way, the
+ * PIN/token challenge-response from here on is identical.
+ */
 export class SignalingClient {
-  private ws: WebSocket | null = null
+  private conn: WireConnection | null = null
   private authed = false
   private pendingHostName = 'host'
 
   constructor(private readonly opts: SignalingClientOptions) {}
 
-  /** Resolves once auth-ok arrives; rejects with a human-readable reason otherwise. */
-  connect(): Promise<void> {
+  /** LAN transport: connect directly to a discovered address:port. */
+  connect(host: string, port: number): Promise<void> {
+    return this.attach(wrapWebSocket(new WebSocket(`ws://${host}:${port}`)))
+  }
+
+  /** Internet transport: attach to a connection an external relay already paired. */
+  attach(conn: WireConnection): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://${this.opts.host}:${this.opts.port}`)
-      this.ws = ws
+      this.conn = conn
 
       const timer = setTimeout(() => {
         reject(new Error('timed out waiting for the host'))
-        ws.close()
+        conn.close()
       }, AUTH_TIMEOUT_MS)
 
-      ws.on('message', (data) => {
-        const msg = parseSignalMessage(parseJson(data.toString()))
+      conn.onMessage((data) => {
+        const msg = parseSignalMessage(parseJson(data))
         if (!msg) return
 
         if (msg.t === 'challenge') {
           if (msg.version !== PROTOCOL_VERSION) {
             clearTimeout(timer)
             reject(new Error('app versions do not match - update both machines'))
-            ws.close()
+            conn.close()
             return
           }
           this.pendingHostName = msg.hostName
-          ws.send(
+          conn.send(
             JSON.stringify({
               t: 'auth',
               proof: computeProof(this.opts.secret, msg.challenge),
@@ -88,36 +97,27 @@ export class SignalingClient {
         if (this.authed) this.opts.onMessage(msg)
       })
 
-      ws.on('error', (err) => {
+      conn.onClose((code, reason) => {
         clearTimeout(timer)
-        if (!this.authed) reject(err instanceof Error ? err : new Error(String(err)))
-      })
-
-      ws.on('close', (code, reasonBuf) => {
-        clearTimeout(timer)
-        const reason = describeClose(code, reasonBuf.toString())
-        if (!this.authed) reject(new Error(reason))
-        else this.opts.onClosed(code, reason)
-        this.ws = null
+        const described = describeClose(code, reason)
+        if (!this.authed) reject(new Error(described))
+        else this.opts.onClosed(code, described)
+        this.conn = null
       })
     })
   }
 
   send(msg: SignalMessage): void {
-    if (this.authed && this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg))
+    if (this.authed && this.conn?.isOpen) {
+      this.conn.send(JSON.stringify(msg))
     }
   }
 
   async close(): Promise<void> {
-    const ws = this.ws
-    this.ws = null
+    const conn = this.conn
+    this.conn = null
     this.authed = false
-    if (!ws) return
-    await new Promise<void>((resolve) => {
-      ws.once('close', () => resolve())
-      ws.close()
-      setTimeout(resolve, 500)
-    })
+    if (!conn) return
+    conn.close()
   }
 }

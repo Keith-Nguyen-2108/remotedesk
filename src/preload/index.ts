@@ -22,6 +22,13 @@ const api = {
     connect: (token: string) => ipcRenderer.invoke('session:connect', token),
     disconnect: () => ipcRenderer.invoke('session:disconnect')
   },
+  /** Internet mode: an optional public relay that lets two machines connect
+   * even when LAN discovery finds nothing. */
+  relay: {
+    get: () => ipcRenderer.invoke('relay:get'),
+    set: (url: string | null) => ipcRenderer.invoke('relay:set', url),
+    onStatus: (cb: (p: unknown) => void) => on('relay:status', cb)
+  },
   /** Incoming role: someone is connecting to this machine. */
   host: {
     signal: (msg: SignalMessage) => ipcRenderer.invoke('host:signal', msg),

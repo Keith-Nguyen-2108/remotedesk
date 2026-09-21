@@ -6,9 +6,22 @@ export interface PeerHandles {
   channels: { input?: RTCDataChannel; ctrl?: RTCDataChannel; file?: RTCDataChannel }
 }
 
-export function createPeer(onIce: (candidate: IceCandidatePayload) => void): PeerHandles {
-  // No STUN/TURN: LAN only in this plan. The internet plan adds ice servers here.
-  const pc = new RTCPeerConnection({ iceServers: [] })
+// Public STUN servers are free and need nothing hosted by this app: they only
+// tell a peer its own public address/port so a router's NAT can be punched
+// through for a direct P2P connection. They see none of the call's traffic.
+// A restrictive/symmetric NAT that STUN cannot get through still needs a TURN
+// relay, which does carry real bandwidth and is not included here - see
+// server/README.md.
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+]
+
+export function createPeer(
+  onIce: (candidate: IceCandidatePayload) => void,
+  iceServers: RTCIceServer[] = DEFAULT_ICE_SERVERS
+): PeerHandles {
+  const pc = new RTCPeerConnection({ iceServers })
   const handles: PeerHandles = { pc, channels: {} }
 
   pc.onicecandidate = (event) => {
