@@ -5,3 +5,4 @@ dist/
 *.log
 server/node_modules/
 server/dist/
+scripts/*.local.sh
