@@ -1,0 +1,23 @@
+{
+  "name": "remotedesk-relay",
+  "version": "1.0.0",
+  "description": "Public rendezvous relay for RemoteDesk internet mode - pairs two machines that cannot reach each other directly, then gets out of the way",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.0",
+    "tsx": "^4.19.0"
+  }
+}
