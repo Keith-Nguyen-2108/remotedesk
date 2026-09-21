@@ -57,7 +57,28 @@ a plain `ws://` relay reachable from the internet works too, but is
 unencrypted between each app and the relay - use TLS for anything beyond a
 quick test.
 
-## Deploy without your own VPS (Fly.io example)
+## Deploy for $0
+
+**GitHub Pages and Vercel do not work for this** - not a pricing limit, an
+architecture mismatch. GitHub Pages only serves static files, no backend
+process at all. Vercel's functions are serverless: short-lived, stateless,
+torn down between requests - this relay needs the opposite, one process that
+stays alive and holds an in-memory map of who is currently reachable. Neither
+can hold a WebSocket connection open indefinitely for many clients at once.
+
+What actually works for free:
+
+**Oracle Cloud "Always Free" (recommended - free forever, a real VPS):**
+Oracle's free tier includes a small ARM VM (4 OCPU / 24GB RAM on the Ampere
+shape) that never expires as long as you stay within it - no trial period, no
+"free for 12 months then billed." Sign up, launch an "Always Free" Ampere
+instance, open port 8080 (or 443) in its security list, then follow "Deploy
+with Docker" above exactly as written. A card is required at signup for
+identity verification, but the Always Free resources are never billed. This
+is the closest thing to "deploy once, forget about it, pay nothing" for a
+tiny always-on process like this one.
+
+**Fly.io / Render (simpler setup, smaller free allowance):**
 
 ```bash
 cd server
@@ -65,9 +86,22 @@ fly launch --no-deploy   # creates fly.toml, pick any region
 fly deploy
 ```
 
-Fly (and Render, Railway, etc.) give you a `wss://your-app.fly.dev` URL with
-TLS already handled - no nginx/certbot needed, and there's a free tier that
-comfortably covers personal use.
+Both give you a `wss://` URL with TLS already handled, no nginx/certbot
+needed. Caveat worth knowing: Render's free web services spin down after ~15
+minutes with no incoming HTTP request, so a machine's "always reachable"
+registration can get dropped and need to reconnect (the app already retries
+automatically - worst case is a short delay on the next connection attempt,
+not a permanent break). Check each platform's current free-tier terms before
+relying on one; these change over time and I can't promise today's numbers
+are still accurate whenever you read this.
+
+**A spare Raspberry Pi / old machine you already own:** genuinely free (you
+already paid for the hardware and electricity is negligible for a service
+this small), but only works if your home router can forward a port to it AND
+your ISP gives you a real public IP (many residential ISPs use CGNAT, which
+makes this impossible no matter what you configure). A free dynamic-DNS
+service like DuckDNS handles an IP that changes over time. More fragile than
+a real VPS - fine to try, not what I'd rely on if the connection matters.
 
 ## Point the app at it
 
