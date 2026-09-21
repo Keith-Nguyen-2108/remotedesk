@@ -1,5 +1,6 @@
+import { IceQueue } from '../../shared/ice-queue'
 import { parseSignalMessage, type InputMessage } from '../../shared/protocol'
-import { addIceCandidate, createPeer, type PeerHandles } from './peer'
+import { createPeer, type PeerHandles } from './peer'
 
 export interface ClientSessionCallbacks {
   onStatus: (text: string) => void
@@ -10,6 +11,9 @@ export interface ClientSessionCallbacks {
 
 export class ClientSession {
   private peer: PeerHandles | null = null
+  // Candidates routinely arrive before the offer does; holding them here is
+  // what keeps the connection from silently failing to establish.
+  private readonly ice = new IceQueue()
 
   constructor(private readonly cb: ClientSessionCallbacks) {}
 
@@ -19,6 +23,7 @@ export class ClientSession {
 
     if (msg.t === 'offer') {
       this.stop()
+      this.ice.reset()
       const peer = createPeer((candidate) => void window.rd.client.signal({ t: 'ice', candidate }))
       this.peer = peer
 
@@ -46,6 +51,7 @@ export class ClientSession {
       peer.pc.onconnectionstatechange = () => this.cb.onStatus(`peer: ${peer.pc.connectionState}`)
 
       await peer.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
+      await this.ice.open(peer.pc)
       const answer = await peer.pc.createAnswer()
       await peer.pc.setLocalDescription(answer)
       await window.rd.client.signal({ t: 'answer', sdp: answer.sdp ?? '' })
@@ -53,7 +59,7 @@ export class ClientSession {
       return
     }
 
-    if (msg.t === 'ice' && this.peer) addIceCandidate(this.peer.pc, msg.candidate)
+    if (msg.t === 'ice') await this.ice.add(msg.candidate)
   }
 
   /** Input is the latency-critical path, so it gets its own channel. */
@@ -67,6 +73,7 @@ export class ClientSession {
   }
 
   stop(): void {
+    this.ice.reset()
     this.peer?.pc.close()
     this.peer = null
   }

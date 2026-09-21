@@ -12,6 +12,13 @@ interface Identity {
   platform: string
 }
 
+interface PermissionState {
+  platform: string
+  screenRecording: 'granted' | 'denied' | 'not-determined' | 'not-needed'
+  accessibility: 'granted' | 'denied' | 'not-determined' | 'not-needed'
+  ready: boolean
+}
+
 interface ScreenChoice {
   id: string
   name: string
@@ -240,15 +247,16 @@ export function createAppView(): HTMLElement {
 
   connectBtn.onclick = async () => {
     connectBtn.disabled = true
-    setSessionStatus('looking for that ID on the network...')
+    setSessionStatus('looking for that ID, then waiting for them to allow...')
     try {
-      const result = (await window.rd.session.connect(peerInput.value)) as {
-        hostName: string
-        address: string
-        via: 'lan' | 'relay'
-      }
-      const via = result.via === 'relay' ? 'over the internet relay' : `on the LAN (${result.address})`
-      setSessionStatus(`found ${result.hostName} ${via} - waiting for them to allow`)
+      // session:connect only resolves once the host has already approved -
+      // SignalingClient.attach() waits for 'auth-ok', which the host sends
+      // AFTER the Allow/Deny dialog resolves to Allow. So by the time this
+      // continuation runs, approval already happened; window.rd.client.
+      // onConnected (fired moments earlier, inside that same approval) is
+      // the accurate status from here on - this handler must not overwrite
+      // it with stale "waiting for them to allow" text.
+      await window.rd.session.connect(peerInput.value)
       disconnectBtn.disabled = false
     } catch (err) {
       setSessionStatus((err as Error).message)
@@ -278,12 +286,31 @@ export function createAppView(): HTMLElement {
   window.rd.host.onClientJoined(async (payload) => {
     const { clientName } = payload as { clientName: string }
     setIncomingStatus(`${clientName} connected - sharing screen`)
+
+    // Check the grant up front. Without it getDisplayMedia fails with a
+    // meaningless "Invalid capture constraints", and the peer would otherwise
+    // sit forever on a screen that is never coming - so say exactly what is
+    // wrong here, and tell them too.
+    const permissions = (await window.rd.permissions.get()) as PermissionState
+    if (permissions.screenRecording !== 'granted' && permissions.screenRecording !== 'not-needed') {
+      const reason = 'the other machine has not granted Screen Recording'
+      setIncomingStatus(
+        'could not share the screen: Screen Recording is not granted. ' +
+          'Enable RemoteDesk in System Settings > Privacy & Security > Screen Recording, ' +
+          'then quit and reopen this app.'
+      )
+      await window.rd.host.abortSession(reason)
+      return
+    }
+
     try {
       await hostSession.start()
       await window.rd.input.setEnabled(allowControl.checked)
       await window.rd.clipboard.watch(true)
     } catch (err) {
-      setIncomingStatus(`could not share the screen: ${(err as Error).message}`)
+      const message = (err as Error).message
+      setIncomingStatus(`could not share the screen: ${message}`)
+      await window.rd.host.abortSession(`the other machine could not share its screen (${message})`)
     }
   })
 

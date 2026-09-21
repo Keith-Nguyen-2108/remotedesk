@@ -210,6 +210,15 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('host:signal', (_e, msg: SignalMessage) => server?.send(msg))
+
+  /**
+   * The host could not actually start sharing (most often: macOS Screen
+   * Recording is not granted). Drop the peer with the real reason instead of
+   * leaving them on a "waiting for their screen" spinner forever.
+   */
+  ipcMain.handle('host:abort-session', (_e, reason: string) => {
+    server?.disconnectClient(reason)
+  })
   ipcMain.handle('client:signal', (_e, msg: SignalMessage) => outgoing?.send(msg))
 
   // ---- input injection ----

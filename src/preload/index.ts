@@ -32,6 +32,7 @@ const api = {
   /** Incoming role: someone is connecting to this machine. */
   host: {
     signal: (msg: SignalMessage) => ipcRenderer.invoke('host:signal', msg),
+    abortSession: (reason: string) => ipcRenderer.invoke('host:abort-session', reason),
     onClientJoined: (cb: (p: unknown) => void) => on('host:client-joined', cb),
     onClientLeft: (cb: (p: unknown) => void) => on('host:client-left', cb),
     onSignal: (cb: (p: unknown) => void) => on('host:signal', cb)

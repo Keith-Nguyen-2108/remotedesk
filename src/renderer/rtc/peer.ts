@@ -37,15 +37,6 @@ export function createPeer(
   return handles
 }
 
-export function addIceCandidate(pc: RTCPeerConnection, payload: IceCandidatePayload): void {
-  void pc.addIceCandidate({
-    candidate: payload.candidate,
-    sdpMid: payload.sdpMid ?? undefined,
-    sdpMLineIndex: payload.sdpMLineIndex ?? undefined,
-    usernameFragment: payload.usernameFragment ?? undefined
-  })
-}
-
 /** Cap the screen stream so a busy desktop cannot saturate the link. */
 export async function limitBitrate(sender: RTCRtpSender, maxBitrate: number): Promise<void> {
   const params = sender.getParameters()

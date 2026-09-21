@@ -1,5 +1,6 @@
+import { IceQueue } from '../../shared/ice-queue'
 import { parseSignalMessage } from '../../shared/protocol'
-import { addIceCandidate, createPeer, limitBitrate, type PeerHandles } from './peer'
+import { createPeer, limitBitrate, type PeerHandles } from './peer'
 
 export interface HostSessionCallbacks {
   onStatus: (text: string) => void
@@ -13,12 +14,16 @@ const MAX_SCREEN_BITRATE = 8_000_000
 export class HostSession {
   private peer: PeerHandles | null = null
   private stream: MediaStream | null = null
+  // addIceCandidate rejects until the answer is applied, so hold anything the
+  // client sends before that rather than dropping it.
+  private readonly ice = new IceQueue()
 
   constructor(private readonly cb: HostSessionCallbacks) {}
 
   /** Called once a client has authenticated: capture the screen and offer it. */
   async start(): Promise<void> {
     this.stop()
+    this.ice.reset()
 
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 30 },
@@ -57,12 +62,20 @@ export class HostSession {
 
   async handleSignal(raw: unknown): Promise<void> {
     const msg = parseSignalMessage(raw)
-    if (!msg || !this.peer) return
+    if (!msg) return
+
+    // Queue candidates even if start() has not finished building the peer -
+    // dropping them here is exactly the failure this queue exists to prevent.
+    if (msg.t === 'ice') {
+      await this.ice.add(msg.candidate)
+      return
+    }
+
+    if (!this.peer) return
     if (msg.t === 'answer') {
       await this.peer.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp })
+      await this.ice.open(this.peer.pc)
       this.cb.onStatus('answer applied')
-    } else if (msg.t === 'ice') {
-      addIceCandidate(this.peer.pc, msg.candidate)
     }
   }
 
@@ -71,6 +84,7 @@ export class HostSession {
   }
 
   stop(): void {
+    this.ice.reset()
     this.stream?.getTracks().forEach((t) => t.stop())
     this.stream = null
     this.peer?.pc.close()

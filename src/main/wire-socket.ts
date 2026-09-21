@@ -16,12 +16,38 @@ export interface WireConnection {
   onClose(cb: (code: number, reason: string) => void): void
 }
 
-/** Adapts a real `ws` library socket to the WireConnection interface. */
+/**
+ * Adapts a real `ws` library socket to the WireConnection interface.
+ *
+ * Frames are buffered from the moment of wrapping until a consumer attaches.
+ * That window is real and lossy over a relay: the peer starts talking as soon
+ * as the relay pairs the two sockets, while this side is still threading the
+ * connection up through async IPC before anything calls onMessage. A
+ * WebSocket replays nothing to a listener attached later, so without this the
+ * very first frame - the auth challenge - can vanish and the handshake then
+ * just times out with no explanation.
+ */
 export function wrapWebSocket(ws: WebSocket): WireConnection {
   // A socket error on this side almost always precedes a close event, but
   // some environments never fire 'close' after 'error' - force it so callers
   // never wait forever on a socket that is actually dead.
   ws.on('error', () => ws.close())
+
+  const pendingMessages: string[] = []
+  let deliverMessage: ((data: string) => void) | null = null
+  ws.on('message', (data) => {
+    const text = data.toString()
+    if (deliverMessage) deliverMessage(text)
+    else pendingMessages.push(text)
+  })
+
+  const pendingCloses: Array<[number, string]> = []
+  let deliverClose: ((code: number, reason: string) => void) | null = null
+  ws.on('close', (code, reasonBuf) => {
+    const reason = reasonBuf.toString()
+    if (deliverClose) deliverClose(code, reason)
+    else pendingCloses.push([code, reason])
+  })
 
   return {
     send: (data) => {
@@ -31,7 +57,13 @@ export function wrapWebSocket(ws: WebSocket): WireConnection {
     get isOpen() {
       return ws.readyState === ws.OPEN
     },
-    onMessage: (cb) => ws.on('message', (data) => cb(data.toString())),
-    onClose: (cb) => ws.on('close', (code, reasonBuf) => cb(code, reasonBuf.toString()))
+    onMessage: (cb) => {
+      deliverMessage = cb
+      for (const text of pendingMessages.splice(0)) cb(text)
+    },
+    onClose: (cb) => {
+      deliverClose = cb
+      for (const [code, reason] of pendingCloses.splice(0)) cb(code, reason)
+    }
   }
 }
