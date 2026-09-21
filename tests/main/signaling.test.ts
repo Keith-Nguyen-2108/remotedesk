@@ -207,6 +207,32 @@ describe('SignalingClient', () => {
     await expect(client.connect('127.0.0.1', port)).rejects.toThrow(/id|auth|reject/i)
   })
 
+  it('rejects rather than hanging when the port is already taken', async () => {
+    // A second copy of the app holding port 45789 used to make start() hang
+    // forever instead of failing: ws attaches its own 'error' listener to the
+    // http server first and re-emits on the WebSocketServer, where an
+    // unhandled 'error' throws before our reject listener is ever reached.
+    // The caller then never got to set up the internet relay either, so the
+    // app silently lost internet mode with nothing logged.
+    const { port } = await startServer()
+    const second = new SignalingServer({
+      port,
+      secret: () => '123456789012',
+      hostName: 'SecondHost',
+      onClientAuthenticated: () => undefined,
+      onMessage: () => undefined,
+      onClientGone: () => undefined
+    })
+
+    const settled = await Promise.race([
+      second.start().then(() => 'resolved').catch((e: Error) => e.message),
+      new Promise<string>((r) => setTimeout(() => r('HUNG'), 2000))
+    ])
+    await second.stop()
+
+    expect(settled).toMatch(/EADDRINUSE/)
+  })
+
   it('surfaces a readable reason when the host is busy', async () => {
     const { port } = await startServer({ secret: '222333444555' })
     const first = await authenticate(port, '222333444555', 'First')

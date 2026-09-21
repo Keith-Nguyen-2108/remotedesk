@@ -83,16 +83,37 @@ export async function startListening(): Promise<number> {
       emit('host:client-left', {})
     }
   })
-  const port = await s.start()
-
-  const r = new DiscoveryResponder({
-    token: getToken,
-    beacon: () => ({ hostName: hostname(), port, platform: platform() })
-  })
-  await r.start()
-
   server = s
-  responder = r
+
+  // The LAN listener and the internet relay are independent ways in, and a
+  // failure of one must not take the other down with it. Binding the LAN port
+  // can fail for reasons that say nothing about internet reachability - most
+  // obviously another copy of this app already holding it - and letting that
+  // throw here used to skip the relay setup entirely, leaving the machine
+  // quietly unreachable from outside with only a console message to show why.
+  let port = 0
+  try {
+    port = await s.start()
+  } catch (err) {
+    emit('lan:status', {
+      text: `not reachable on this network: ${(err as Error).message}`
+    })
+  }
+
+  if (port > 0) {
+    try {
+      const r = new DiscoveryResponder({
+        token: getToken,
+        beacon: () => ({ hostName: hostname(), port, platform: platform() })
+      })
+      await r.start()
+      responder = r
+    } catch (err) {
+      emit('lan:status', {
+        text: `this machine will not be found by ID on the LAN: ${(err as Error).message}`
+      })
+    }
+  }
 
   const relayUrl = getRelayUrl()
   if (relayUrl) {

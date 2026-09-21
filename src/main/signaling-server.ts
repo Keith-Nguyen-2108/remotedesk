@@ -46,15 +46,26 @@ export class SignalingServer {
 
   async start(): Promise<number> {
     const http = createServer()
-    const wss = new WebSocketServer({ server: http })
-    wss.on('connection', (ws) => this.handleConnection(wrapWebSocket(ws)))
-    this.http = http
-    this.wss = wss
 
-    await new Promise<void>((resolve, reject) => {
+    // Claim the failure path before ws can. Attaching a WebSocketServer to an
+    // http server makes ws re-emit the server's 'error' on itself, and with
+    // nothing listening there that unhandled 'error' derails the whole call:
+    // listen() failures (a second copy of the app already holding the port,
+    // most obviously) then never surface at all and this promise hangs
+    // forever - taking the internet relay, set up further down the caller,
+    // silently with it.
+    const bound = new Promise<void>((resolve, reject) => {
       http.once('error', reject)
       http.listen(this.opts.port, '0.0.0.0', () => resolve())
     })
+
+    const wss = new WebSocketServer({ server: http })
+    wss.on('connection', (ws) => this.handleConnection(wrapWebSocket(ws)))
+    wss.on('error', () => undefined)
+    this.http = http
+    this.wss = wss
+
+    await bound
     return (http.address() as AddressInfo).port
   }
 
