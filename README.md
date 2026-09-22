@@ -46,6 +46,25 @@ URL is pinned to the release host and a mismatched checksum is never executed.
 Version numbers come from the CI run (`0.1.<run number>`), so every push to `main` is
 strictly newer than the one before it without anyone bumping `package.json`.
 
+### Signing (macOS) - why a self-signed certificate is load-bearing
+
+Every macOS build is signed in `build/after-pack.js` with the project's own self-signed
+certificate (SHA-1 `18F396F8…`, kept outside the repo in `~/.remotedesk-signing/`; CI gets
+it from the `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` secrets). This is not cosmetic:
+
+- An **unsigned** electron-builder bundle carries an *invalid* signature, and macOS then
+  refuses Screen Recording outright - silently, with the toggle showing ON. That was the
+  real root cause of "connected but no screen appears".
+- An **ad-hoc** signature is valid, but macOS keys the permission grant on that build's
+  hash, so every self-update would wipe Screen Recording and Accessibility.
+- A **stable certificate** makes the grant key `identifier "com.keithnguyen.remotedesk"
+  and certificate root = H"18f396f8…"`, which every build satisfies - grant once, keep
+  it across updates.
+
+`after-pack.js` refuses to sign with any other identity for exactly this reason. Lose the
+certificate and every machine has to grant permissions again. Gatekeeper still wants
+right-click → Open on first launch (that needs Apple notarization, which this is not).
+
 ## macOS permissions (only needed on the machine being controlled)
 
 A Mac that will be *controlled* needs two grants in System Settings → Privacy & Security:

@@ -16,6 +16,8 @@ asarUnpack:
 
 npmRebuild: true
 
+afterPack: build/after-pack.js
+
 mac:
   category: public.app-category.utilities
   icon: build/icon.png
@@ -33,8 +35,11 @@ mac:
       arch:
         - arm64
         - x64
-  # No Developer ID certificate: skip signing. The app still runs locally
-  # (right-click -> Open on first launch).
+  # electron-builder's own signing is off (it wants an Apple identity); the
+  # bundle is signed in build/after-pack.js with the project's stable
+  # self-signed certificate instead. That signature is what lets macOS honour
+  # Screen Recording / Accessibility at all, and keep honouring them across
+  # self-updates. Gatekeeper still needs right-click -> Open on first launch.
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
