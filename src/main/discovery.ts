@@ -36,7 +36,13 @@ export class DiscoveryResponder {
   private socket: Socket | null = null
 
   constructor(
-    private readonly opts: { port?: number; token: () => string; beacon: () => HostBeacon }
+    private readonly opts: {
+      port?: number
+      token: () => string
+      beacon: () => HostBeacon
+      /** Called if discovery dies after a successful bind. */
+      onError?: (err: Error) => void
+    }
   ) {}
 
   async start(): Promise<void> {
@@ -56,13 +62,22 @@ export class DiscoveryResponder {
       socket.send(JSON.stringify(wire), rinfo.port, rinfo.address)
     })
 
-    socket.on('error', () => void this.stop())
-
     await new Promise<void>((resolve, reject) => {
-      socket.once('error', reject)
+      socket.once('error', (err) => {
+        // `this.socket` is not assigned yet, so stop() could not clean this up.
+        socket.close()
+        reject(err)
+      })
       socket.bind(this.opts.port ?? DISCOVERY_PORT, () => resolve())
     })
     this.socket = socket
+
+    // Past the bind, an error means this machine has quietly stopped answering
+    // discovery. Report it rather than just shutting down unannounced.
+    socket.on('error', (err) => {
+      this.opts.onError?.(err)
+      void this.stop()
+    })
   }
 
   async stop(): Promise<void> {

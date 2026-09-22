@@ -280,37 +280,53 @@ export function createAppView(): HTMLElement {
     resetOutgoing(`disconnected: ${reason}`)
   })
 
-  window.rd.client.onSignal((msg) => void clientSession.handleSignal(msg))
+  // Never leave these as bare `void`: handleSignal awaits setRemoteDescription,
+  // createAnswer and IPC, and a rejection swallowed here means no answer is
+  // ever sent and the peer waits forever with nothing on screen to say why.
+  window.rd.client.onSignal((msg) => {
+    clientSession.handleSignal(msg).catch((err: Error) => {
+      setSessionStatus(`connection failed: ${err.message}`)
+    })
+  })
 
   // --- being connected to ---
   window.rd.host.onClientJoined(async (payload) => {
     const { clientName } = payload as { clientName: string }
     setIncomingStatus(`${clientName} connected - sharing screen`)
 
-    // Check the grant up front. Without it getDisplayMedia fails with a
-    // meaningless "Invalid capture constraints", and the peer would otherwise
-    // sit forever on a screen that is never coming - so say exactly what is
-    // wrong here, and tell them too.
-    const permissions = (await window.rd.permissions.get()) as PermissionState
-    if (permissions.screenRecording !== 'granted' && permissions.screenRecording !== 'not-needed') {
-      const reason = 'the other machine has not granted Screen Recording'
-      setIncomingStatus(
-        'could not share the screen: Screen Recording is not granted. ' +
-          'Enable RemoteDesk in System Settings > Privacy & Security > Screen Recording, ' +
-          'then quit and reopen this app.'
-      )
-      await window.rd.host.abortSession(reason)
-      return
-    }
-
+    // Try first, explain afterwards. Capture failing is the only thing that
+    // actually matters, and the reported permission state is not a reliable
+    // predictor of it - 'not-determined' also covers "no TCC record yet", where
+    // capture may well succeed. Gating on it would refuse sessions that work.
+    // What the state is good for is translating getDisplayMedia's useless
+    // "Invalid capture constraints" into something actionable, and telling the
+    // peer too, so they are not left waiting on a screen that is never coming.
     try {
       await hostSession.start()
       await window.rd.input.setEnabled(allowControl.checked)
       await window.rd.clipboard.watch(true)
     } catch (err) {
       const message = (err as Error).message
-      setIncomingStatus(`could not share the screen: ${message}`)
-      await window.rd.host.abortSession(`the other machine could not share its screen (${message})`)
+      const permissions = (await window.rd.permissions.get()) as PermissionState
+      const denied =
+        permissions.screenRecording !== 'granted' && permissions.screenRecording !== 'not-needed'
+
+      // Release the capture this attempt may already have acquired before
+      // failing later on - abortSession alone would leave it running.
+      hostSession.stop()
+
+      setIncomingStatus(
+        denied
+          ? 'could not share the screen: Screen Recording is not granted. ' +
+              'Enable RemoteDesk in System Settings > Privacy & Security > Screen Recording, ' +
+              'then quit and reopen this app.'
+          : `could not share the screen: ${message}`
+      )
+      await window.rd.host.abortSession(
+        denied
+          ? 'the other machine has not granted Screen Recording'
+          : `the other machine could not share its screen (${message})`
+      )
     }
   })
 
@@ -321,7 +337,11 @@ export function createAppView(): HTMLElement {
     setIncomingStatus('nobody connected')
   })
 
-  window.rd.host.onSignal((msg) => void hostSession.handleSignal(msg))
+  window.rd.host.onSignal((msg) => {
+    hostSession.handleSignal(msg).catch((err: Error) => {
+      setIncomingStatus(`connection failed: ${err.message}`)
+    })
+  })
 
   // Local clipboard changes go out on whichever session is live; incoming ones
   // are applied by TransferPanel.handleCtrl.

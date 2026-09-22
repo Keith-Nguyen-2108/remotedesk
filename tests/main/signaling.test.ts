@@ -207,6 +207,77 @@ describe('SignalingClient', () => {
     await expect(client.connect('127.0.0.1', port)).rejects.toThrow(/id|auth|reject/i)
   })
 
+  it('shuts down even while a client is still connected', async () => {
+    // A borrowed http server makes wss.close() wait for the last client to
+    // leave, and http.close() wait out upgraded sockets - so with a peer still
+    // attached neither callback fires and stop() never settles. Every caller
+    // hangs with it, including the restart behind saving a relay URL.
+    const { s, port } = await startServer()
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`)
+    await new Promise<void>((r) => ws.once('open', () => r()))
+
+    const outcome = await Promise.race([
+      s.stop().then(() => 'settled'),
+      new Promise<string>((r) => setTimeout(() => r('HUNG'), 3000))
+    ])
+    ws.terminate()
+    expect(outcome).toBe('settled')
+  })
+
+  it('reports the client as gone when the host aborts the session', async () => {
+    // onClientGone is what stops screen capture and input injection, so an
+    // aborted session that skips it keeps sharing the screen indefinitely.
+    const { s, port, authed } = await startServer()
+    const ws = await authenticate(port, '123456789012', 'Laptop')
+    expect(authed).toEqual(['Laptop'])
+
+    s.disconnectClient('could not share the screen')
+    await new Promise<void>((r) => ws.once('close', () => r()))
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(authed).toEqual(['Laptop', '<gone>'])
+  })
+
+  it('does not announce a client that hung up while the host was deciding', async () => {
+    // Announcing it anyway starts capture and enables input injection for a
+    // session with nobody on the other end, and the close event that would
+    // have torn it down has already been and gone.
+    let approve: (ok: boolean) => void = () => undefined
+    const authed: string[] = []
+    const s = new SignalingServer({
+      port: 0,
+      secret: () => '123456789012',
+      hostName: 'TestHost',
+      approveClient: () => new Promise<boolean>((r) => (approve = r)),
+      onClientAuthenticated: (name) => authed.push(name),
+      onMessage: () => undefined,
+      onClientGone: () => authed.push('<gone>')
+    })
+    server = s
+    const port = await s.start()
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`)
+    const challenge = await nextMessage(ws)
+    if (challenge.t !== 'challenge') throw new Error('expected a challenge')
+    ws.send(
+      JSON.stringify({
+        t: 'auth',
+        proof: computeProof('123456789012', challenge.challenge),
+        clientName: 'Laptop',
+        version: PROTOCOL_VERSION
+      })
+    )
+    await new Promise((r) => setTimeout(r, 50))
+
+    ws.terminate() // the peer gives up while the dialog is still open
+    await new Promise((r) => setTimeout(r, 100))
+    approve(true) // ... and only then does the host click Allow
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(authed).toEqual([])
+    expect(s.hasClient()).toBe(false)
+  })
+
   it('rejects rather than hanging when the port is already taken', async () => {
     // A second copy of the app holding port 45789 used to make start() hang
     // forever instead of failing: ws attaches its own 'error' listener to the

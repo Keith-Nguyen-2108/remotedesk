@@ -104,7 +104,11 @@ export async function startListening(): Promise<number> {
     try {
       const r = new DiscoveryResponder({
         token: getToken,
-        beacon: () => ({ hostName: hostname(), port, platform: platform() })
+        beacon: () => ({ hostName: hostname(), port, platform: platform() }),
+        onError: (err) =>
+          emit('lan:status', {
+            text: `this machine stopped answering ID lookups on the LAN: ${err.message}`
+          })
       })
       await r.start()
       responder = r

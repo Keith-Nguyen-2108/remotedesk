@@ -24,11 +24,23 @@ export interface IceTarget {
 export class IceQueue {
   private pending: IceCandidatePayload[] = []
   private target: IceTarget | null = null
+  /** Bumped by reset(); lets a late open() recognise that it is stale. */
+  private generation = 0
 
-  /** The connection is ready (remote description applied): flush and go live. */
+  /**
+   * The connection is ready (remote description applied): flush and go live.
+   *
+   * Callers reach this after several awaits, so two overlapping offers can
+   * arrive here out of order - the older one last, pointing at a peer that has
+   * since been torn down. Binding to that peer would send every later
+   * candidate into a closed connection, which fails silently and leaves a
+   * session that negotiated cleanly but never connects.
+   */
   async open(target: IceTarget): Promise<void> {
+    const generation = this.generation
     this.target = target
     for (const payload of this.pending.splice(0)) {
+      if (generation !== this.generation) return
       await this.deliver(payload)
     }
   }
@@ -44,6 +56,7 @@ export class IceQueue {
   reset(): void {
     this.pending = []
     this.target = null
+    this.generation += 1
   }
 
   private async deliver(payload: IceCandidatePayload): Promise<void> {

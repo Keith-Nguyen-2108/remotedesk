@@ -61,7 +61,7 @@ export class SignalingServer {
 
     const wss = new WebSocketServer({ server: http })
     wss.on('connection', (ws) => this.handleConnection(wrapWebSocket(ws)))
-    wss.on('error', () => undefined)
+    wss.on('error', (err) => console.error('signaling websocket server error:', err))
     this.http = http
     this.wss = wss
 
@@ -87,8 +87,11 @@ export class SignalingServer {
   disconnectClient(reason: string): void {
     if (!this.active) return
     this.send({ t: 'bye', reason })
+    // Deliberately leave `active` set: the onClose handler below clears it and
+    // is what fires onClientGone, which is what actually stops screen capture
+    // and input injection. Clearing it here makes that handler's identity
+    // check fail, so an aborted session would keep sharing the screen.
     this.active.close(CLOSE_REJECTED, reason)
-    this.active = null
   }
 
   async stop(): Promise<void> {
@@ -97,8 +100,21 @@ export class SignalingServer {
     const http = this.http
     this.wss = null
     this.http = null
-    if (wss) await new Promise<void>((resolve) => wss.close(() => resolve()))
-    if (http) await new Promise<void>((resolve) => http.close(() => resolve()))
+
+    // Hang up on everyone first. A WebSocketServer that borrows an http server
+    // does not disconnect its clients on close() - it waits for the last one
+    // to leave before firing the callback, and http.close() likewise waits out
+    // upgraded sockets. With a peer still connected neither callback ever
+    // runs, so stop() never settles and every caller hangs with it, including
+    // the startListening() restart behind saving a relay URL.
+    if (wss) {
+      for (const client of wss.clients) client.terminate()
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
+    }
+    if (http) {
+      http.closeAllConnections()
+      await new Promise<void>((resolve) => http.close(() => resolve()))
+    }
   }
 
   private handleConnection(conn: WireConnection): void {
@@ -109,9 +125,16 @@ export class SignalingServer {
 
     const challenge = generateChallenge()
     let authed = false
+    let closed = false
+    let awaitingApproval = false
 
+    // The timeout is here to drop peers that never prove they know the ID. It
+    // must not also run while a human decides on the approval dialog: ten
+    // seconds is a realistic amount of time to notice and click Allow, and
+    // firing then would close the connection out from under an approval that
+    // is about to be granted.
     const authTimer = setTimeout(() => {
-      if (!authed) conn.close(CLOSE_AUTH_FAILED, 'auth timeout')
+      if (!authed && !awaitingApproval) conn.close(CLOSE_AUTH_FAILED, 'auth timeout')
     }, AUTH_TIMEOUT_MS)
 
     conn.onMessage((data) => {
@@ -132,6 +155,13 @@ export class SignalingServer {
         }
 
         const finish = (approved: boolean): void => {
+          awaitingApproval = false
+          // The peer may be long gone by the time approval comes back. Going
+          // ahead anyway would announce a client that is not there, and this
+          // machine would start capturing its screen and accepting injected
+          // input for a session nobody is on the other end of - with no close
+          // event left to ever tear it back down.
+          if (closed || !conn.isOpen) return
           if (!approved) {
             conn.close(CLOSE_REJECTED, 'rejected by host')
             return
@@ -144,6 +174,7 @@ export class SignalingServer {
         }
 
         if (this.opts.approveClient) {
+          awaitingApproval = true
           void this.opts.approveClient(msg.clientName).then(finish, () => finish(false))
         } else {
           finish(true)
@@ -158,6 +189,7 @@ export class SignalingServer {
     })
 
     conn.onClose(() => {
+      closed = true
       clearTimeout(authTimer)
       if (this.active === conn) {
         this.active = null
