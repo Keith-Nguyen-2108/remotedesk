@@ -228,11 +228,24 @@ export function createAppView(): HTMLElement {
   })
 
   // --- screens ---
-  void window.rd.screens.list().then((value) => {
-    const list = value as ScreenChoice[]
-    screenSelect.innerHTML = list.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')
-    if (list[0]) void window.rd.screens.select(list[0].id)
-  })
+  // Listing screens is the first thing macOS refuses without Screen Recording,
+  // and it rejects rather than returning an empty list. Left uncaught it became
+  // an unhandled rejection in the console and an empty dropdown on screen, with
+  // nothing anywhere saying why - so say it here, in the control itself.
+  const loadScreens = async (): Promise<void> => {
+    try {
+      const list = (await window.rd.screens.list()) as ScreenChoice[]
+      screenSelect.innerHTML = list
+        .map((s) => `<option value="${s.id}">${s.name}</option>`)
+        .join('')
+      screenSelect.disabled = false
+      if (list[0]) await window.rd.screens.select(list[0].id)
+    } catch {
+      screenSelect.innerHTML = '<option>no screens available - check Screen Recording</option>'
+      screenSelect.disabled = true
+    }
+  }
+  void loadScreens()
   screenSelect.onchange = () => void window.rd.screens.select(screenSelect.value)
 
   allowControl.onchange = () => void window.rd.input.setEnabled(allowControl.checked)
