@@ -1,3 +1,4 @@
+import { summarizeIceFailure, type CandidateStat } from '../../shared/ice-diagnostics'
 import type { IceCandidatePayload } from '../../shared/protocol'
 
 export interface PeerHandles {
@@ -43,4 +44,37 @@ export async function limitBitrate(sender: RTCRtpSender, maxBitrate: number): Pr
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}]
   params.encodings[0]!.maxBitrate = maxBitrate
   await sender.setParameters(params)
+}
+
+/**
+ * Reports connection state, and does the two things a bare "peer: failed"
+ * never did: try once more with fresh ICE (a transient blip is the common
+ * case, and restartIce is exactly what the API offers for it), and when that
+ * also fails, say what the candidates looked like so the *cause* is on
+ * screen - because the two machines are usually in different places and
+ * nobody can see both.
+ */
+export function watchConnection(pc: RTCPeerConnection, onStatus: (text: string) => void): void {
+  let restarted = false
+  pc.onconnectionstatechange = () => {
+    const state = pc.connectionState
+    if (state !== 'failed') {
+      onStatus(`peer: ${state}`)
+      return
+    }
+    if (!restarted) {
+      restarted = true
+      onStatus('peer: failed - retrying with fresh ICE...')
+      pc.restartIce()
+      return
+    }
+    pc.getStats().then(
+      (report) => {
+        const stats: CandidateStat[] = []
+        report.forEach((s) => stats.push(s as CandidateStat))
+        onStatus(summarizeIceFailure(stats))
+      },
+      () => onStatus('peer: failed (no stats available)')
+    )
+  }
 }

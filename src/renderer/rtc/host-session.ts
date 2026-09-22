@@ -1,6 +1,6 @@
 import { IceQueue } from '../../shared/ice-queue'
 import { parseSignalMessage } from '../../shared/protocol'
-import { createPeer, limitBitrate, type PeerHandles } from './peer'
+import { createPeer, limitBitrate, type PeerHandles, watchConnection } from './peer'
 
 export interface HostSessionCallbacks {
   onStatus: (text: string) => void
@@ -52,7 +52,7 @@ export class HostSession {
     const sender = peer.pc.addTrack(track, stream)
     await limitBitrate(sender, MAX_SCREEN_BITRATE)
 
-    peer.pc.onconnectionstatechange = () => this.cb.onStatus(`peer: ${peer.pc.connectionState}`)
+    watchConnection(peer.pc, (text) => this.cb.onStatus(text))
 
     const offer = await peer.pc.createOffer()
     await peer.pc.setLocalDescription(offer)

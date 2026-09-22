@@ -1,6 +1,6 @@
 import { IceQueue } from '../../shared/ice-queue'
 import { parseSignalMessage, type InputMessage } from '../../shared/protocol'
-import { createPeer, type PeerHandles } from './peer'
+import { createPeer, type PeerHandles, watchConnection } from './peer'
 
 export interface ClientSessionCallbacks {
   onStatus: (text: string) => void
@@ -48,7 +48,7 @@ export class ClientSession {
         }
       }
 
-      peer.pc.onconnectionstatechange = () => this.cb.onStatus(`peer: ${peer.pc.connectionState}`)
+      watchConnection(peer.pc, (text) => this.cb.onStatus(text))
 
       await peer.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
       await this.ice.open(peer.pc)
