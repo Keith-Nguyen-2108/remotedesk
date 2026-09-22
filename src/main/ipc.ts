@@ -22,11 +22,14 @@ import { connectViaRelay, RelayListener } from './relay-transport'
 import { getRelayUrl, setRelayUrl } from './settings'
 import { SignalingClient } from './signaling-client'
 import { SignalingServer } from './signaling-server'
+import { applyUpdate, artifactName, checkForUpdate, downloadUpdate } from './updater'
+import type { AvailableUpdate } from '../shared/update-manifest'
 
 let server: SignalingServer | null = null
 let responder: DiscoveryResponder | null = null
 let relayListener: RelayListener | null = null
 let outgoing: SignalingClient | null = null
+let pendingUpdate: AvailableUpdate | null = null
 
 /** How long to wait for a LAN answer before trying the internet relay. */
 const LAN_LOOKUP_TIMEOUT_MS = 1800
@@ -299,5 +302,34 @@ export function registerIpc(): void {
     // (Preview on macOS, Photos on Windows) - no bespoke viewer to maintain.
     const error = await shell.openPath(filePath)
     return error ? { opened: false as const, reason: error } : { opened: true as const, path: filePath }
+  })
+
+  // ---- self-update ----
+  ipcMain.handle('update:current-version', () => app.getVersion())
+
+  ipcMain.handle('update:check', async () => {
+    try {
+      const update = await checkForUpdate()
+      pendingUpdate = update
+      if (!update) return { available: false as const }
+      return { available: true as const, version: update.version, size: update.file.size }
+    } catch (err) {
+      // Never let a failed check bubble into the renderer as an exception: the
+      // app is perfectly usable without updating, and being offline is not an
+      // error worth interrupting anyone over.
+      return { available: false as const, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle('update:install', async () => {
+    const update = pendingUpdate
+    if (!update) return { started: false as const, reason: 'no update is pending' }
+    try {
+      const path = await downloadUpdate(update.file, artifactName(update))
+      applyUpdate(path)
+      return { started: true as const }
+    } catch (err) {
+      return { started: false as const, reason: (err as Error).message }
+    }
   })
 }

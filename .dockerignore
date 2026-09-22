@@ -1,0 +1,11 @@
+# Only server/ is ever copied into the image; keep everything else - above all
+# the desktop app's node_modules and its 100MB+ installers - out of the build
+# context so Render is not uploading the whole project on every deploy.
+#
+# `!server` re-includes the directory itself: excluding a parent and then
+# re-including paths underneath it is unreliable, so allow the directory and
+# prune inside it instead.
+*
+!server
+server/node_modules
+server/dist

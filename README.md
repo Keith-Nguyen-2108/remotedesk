@@ -12,11 +12,39 @@ never sees your screen, keystrokes, or files, which still travel directly betwee
 
 ## Install
 
-- **macOS** — open the `.dmg`, drag RemoteDesk to Applications, then **right-click the
-  app → Open** the first time. A plain double-click is blocked because the app is
+Download links never change - they always serve the newest build:
+
+| | |
+|---|---|
+| macOS (Apple Silicon) | [RemoteDesk-arm64.dmg](https://github.com/Keith-Nguyen-2108/remotedesk/releases/latest/download/RemoteDesk-arm64.dmg) |
+| macOS (Intel) | [RemoteDesk-intel.dmg](https://github.com/Keith-Nguyen-2108/remotedesk/releases/latest/download/RemoteDesk-intel.dmg) |
+| Windows | [RemoteDesk-Setup.exe](https://github.com/Keith-Nguyen-2108/remotedesk/releases/latest/download/RemoteDesk-Setup.exe) |
+
+- **macOS** - open the `.dmg`, drag RemoteDesk to Applications, then **right-click the
+  app -> Open** the first time. A plain double-click is blocked because the app is
   unsigned.
-- **Windows** — run `RemoteDesk Setup 0.1.0.exe`. SmartScreen warns about an unknown
-  publisher: *More info → Run anyway*.
+- **Windows** - run the installer. SmartScreen warns about an unknown publisher:
+  *More info -> Run anyway*.
+
+You only ever do this once per machine. After that the app updates itself.
+
+## Updates
+
+Every push to `main` builds all three installers and republishes the `latest` release,
+alongside an `update.json` describing it. An installed copy checks that manifest at
+launch and every six hours, and shows an **Install and restart** button when a newer
+version exists - it downloads the build for its own platform, checks it against the
+SHA-256 in the manifest, swaps itself and relaunches.
+
+This is a hand-rolled updater rather than `electron-updater` for one concrete reason:
+macOS's built-in updater is Squirrel, which validates the new bundle's code signature
+against the installed one and refuses outright without a Developer ID certificate
+(~$99/year). Replacing the `.app` bundle directly needs no certificate, so integrity
+is carried by the published checksum instead - see `src/main/updater.ts`. The download
+URL is pinned to the release host and a mismatched checksum is never executed.
+
+Version numbers come from the CI run (`0.1.<run number>`), so every push to `main` is
+strictly newer than the one before it without anyone bumping `package.json`.
 
 ## macOS permissions (only needed on the machine being controlled)
 
@@ -110,7 +138,7 @@ same-network use.
 ```bash
 npm install
 npm run dev        # run the app with hot reload
-npm test           # 139 unit and integration tests
+npm test           # 167 unit and integration tests
 npm run typecheck
 npm run dist:mac   # builds both arm64 and x64 .dmg
 npm run dist:win   # builds the .exe
@@ -122,9 +150,9 @@ native binary as one package per platform (`libnut-darwin`, `libnut-win32`,
 gets a genuine PE32+ `libnut.node`. The macOS-only permission shim it also bundles is
 loaded inside a try/catch and short-circuits when `process.platform !== 'darwin'`.
 
-The `.exe` produced this way has not been exercised on real Windows hardware. The
-`build` GitHub Actions workflow builds each installer on its own runner
-(`workflow_dispatch`, or push a `v*` tag) if you want native-built artifacts.
+Local builds are a convenience; the published installers are always the ones CI built
+natively on their own runners (`.github/workflows/release.yml`), so the Windows `.exe`
+people download is produced on Windows rather than cross-built.
 
 ### Layout
 
@@ -134,7 +162,8 @@ The `.exe` produced this way has not been exercised on real Windows hardware. Th
 | `src/main/` | Electron main — signaling server/client, UDP discovery, internet relay client, nut.js injection, capture, permissions, IPC |
 | `src/preload/` | The single `contextBridge` API the renderer may call |
 | `src/renderer/` | UI and the WebRTC sessions |
-| `server/` | The standalone internet relay server — its own package, deployed separately from the app |
+| `server/` | The internet relay server — its own package, deployed to Render from the root `Dockerfile` |
+| `.github/workflows/` | `release.yml`: on every push to `main`, test → build all three installers natively → republish the `latest` release and `update.json` |
 | `tests/` | Vitest; `signaling`, `discovery`, `connect-flow`, `relay-server` and `relay-connect-flow` tests use real sockets, no mocks |
 
 The implementation plan this was built from is in
@@ -149,23 +178,23 @@ machines connect *out* to (an outbound connection passes through any home/mobile
 firewall with no configuration), which introduces them and then gets out of the way -
 the actual screen/control traffic still goes directly peer-to-peer via WebRTC.
 
-That server is `server/` in this repo - see `server/README.md` for what it does and how
-to deploy it (Docker, or a platform like Fly.io with a free tier). It's a small, mostly
-idle process; a few dollars a month of the cheapest VPS you can find is enough. Once
-it's deployed:
+That server is `server/` in this repo, and a running one ships with the app: a fresh
+install already has a default relay address filled in, so connecting across networks
+needs no setup at all. It runs on Render's free tier, built from the `Dockerfile` at the
+repository root - it is a small, mostly idle process, and free is genuinely enough for
+it because the screen and control traffic never passes through it.
 
 1. Open RemoteDesk on **both** machines.
-2. Under **Internet (optional)**, paste the relay's `wss://` URL and press Save.
-3. Connect by ID exactly as before. LAN is always tried first; the relay only kicks in
-   when nothing answers on the local network - so this changes nothing for two
-   machines already on the same Wi-Fi.
+2. Connect by ID. LAN is tried first; the relay only kicks in when nothing answers
+   locally - so this changes nothing for two machines on the same Wi-Fi.
 
-This repository does not include a deployed relay - only the code for one and a guide
-to stand it up, since that step needs hosting you control (a VPS, or an account with a
-platform like Fly.io/Render). Everything on the app side (the relay client, the STUN
-servers WebRTC needs to get through most NATs once signaling succeeds, the settings UI)
-is implemented and tested against a real running relay server - see
-`tests/server/relay-server.test.ts` and `tests/main/relay-connect-flow.test.ts`.
+To use your own instead, put its `wss://` URL under **Internet (optional)** and press
+Save. Clearing that field turns internet mode off and keeps the app LAN-only; either
+choice sticks, and an upgrade never moves you back onto the default.
+
+The relay is exercised by real sockets in `tests/server/relay-server.test.ts` and
+`tests/main/relay-connect-flow.test.ts`, and end to end over a deployed one in
+`tests/main/session-negotiation.test.ts`.
 
 ## Not included
 

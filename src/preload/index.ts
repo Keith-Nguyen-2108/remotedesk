@@ -59,6 +59,12 @@ const api = {
     applyRemote: (snapshot: ClipSnapshot) => ipcRenderer.invoke('clipboard:apply-remote', snapshot),
     onLocalChange: (cb: (p: unknown) => void) => on('clipboard:local', cb)
   },
+  /** Self-update against the release the pipeline publishes. */
+  update: {
+    currentVersion: () => ipcRenderer.invoke('update:current-version'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install')
+  },
   permissions: {
     get: () => ipcRenderer.invoke('permissions:get'),
     openScreen: () => ipcRenderer.invoke('permissions:open-screen'),

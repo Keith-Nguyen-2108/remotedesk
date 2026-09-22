@@ -1,0 +1,152 @@
+name: release
+
+# Every push to main produces installers and republishes the single "latest"
+# release, so the download links never change and installed copies see the new
+# version through update.json on their next check.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Patch number comes from the run, so every push is strictly newer than the
+  # last without anyone having to remember to bump package.json.
+  APP_VERSION: 0.1.${{ github.run_number }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  build-mac:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm version "$APP_VERSION" --no-git-tag-version
+      - run: npm run build
+      - run: npx electron-builder --mac --publish never
+        env:
+          # Never pick up a signing identity from the runner keychain: the
+          # build must come out identically unsigned every time, or the
+          # installers stop matching what the update manifest describes.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            dist/RemoteDesk-arm64.dmg
+            dist/RemoteDesk-x64.dmg
+            dist/RemoteDesk-arm64.zip
+            dist/RemoteDesk-x64.zip
+          if-no-files-found: error
+
+  build-win:
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm version "$env:APP_VERSION" --no-git-tag-version
+      - run: npm run build
+      - run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win
+          path: dist/RemoteDesk-Setup.exe
+          if-no-files-found: error
+
+  publish:
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect the installers under their published names
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp artifacts/mac/RemoteDesk-arm64.dmg out/RemoteDesk-arm64.dmg
+          # "intel" rather than "x64" in the published name: that is the link
+          # already handed out, and it says more to whoever is downloading it.
+          cp artifacts/mac/RemoteDesk-x64.dmg   out/RemoteDesk-intel.dmg
+          cp artifacts/mac/RemoteDesk-arm64.zip out/RemoteDesk-arm64.zip
+          cp artifacts/mac/RemoteDesk-x64.zip   out/RemoteDesk-x64.zip
+          cp artifacts/win/RemoteDesk-Setup.exe out/RemoteDesk-Setup.exe
+          ls -l out
+
+      - name: Write the update manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/latest/download/"
+          out = pathlib.Path('out')
+
+          def entry(name):
+              data = (out / name).read_bytes()
+              return {
+                  'url': base + name,
+                  'sha256': hashlib.sha256(data).hexdigest(),
+                  'size': len(data),
+              }
+
+          manifest = {
+              'version': os.environ['APP_VERSION'],
+              'files': {
+                  # The in-app updater swaps a .app bundle, so macOS points at
+                  # the zip; Windows re-runs the NSIS installer silently.
+                  'darwin-arm64': entry('RemoteDesk-arm64.zip'),
+                  'darwin-x64': entry('RemoteDesk-x64.zip'),
+                  'win32-x64': entry('RemoteDesk-Setup.exe'),
+              },
+          }
+          (out / 'update.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Republish the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Recreate rather than edit: re-uploading an asset under a name that
+          # already exists is rejected, and the whole point of this release is
+          # that its filenames are stable.
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest \
+            --title "RemoteDesk $APP_VERSION" \
+            --notes "Built from ${GITHUB_SHA:0:7}. These filenames are stable - the download links never change, and installed copies update themselves from update.json." \
+            --target "$GITHUB_SHA" \
+            out/RemoteDesk-arm64.dmg \
+            out/RemoteDesk-intel.dmg \
+            out/RemoteDesk-arm64.zip \
+            out/RemoteDesk-x64.zip \
+            out/RemoteDesk-Setup.exe \
+            out/update.json

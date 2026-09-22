@@ -35,6 +35,13 @@ export function createAppView(): HTMLElement {
   root.innerHTML = `
     <div class="layout">
       <div class="main-col">
+        <section class="card update-card" id="update-card" hidden>
+          <div class="row update-row">
+            <span id="update-text">An update is available.</span>
+            <button id="update-install">Install and restart</button>
+          </div>
+        </section>
+
         <section class="card" id="identity-card">
           <h2>Your ID</h2>
           <p class="hint">Send this to the other machine. It stays the same until you regenerate it.</p>
@@ -342,6 +349,41 @@ export function createAppView(): HTMLElement {
       setIncomingStatus(`connection failed: ${err.message}`)
     })
   })
+
+  // --- self-update ---
+  const updateCard = root.querySelector<HTMLElement>('#update-card')!
+  const updateText = root.querySelector<HTMLElement>('#update-text')!
+  const updateInstall = root.querySelector<HTMLButtonElement>('#update-install')!
+
+  const checkForUpdate = async (): Promise<void> => {
+    const result = (await window.rd.update.check()) as {
+      available: boolean
+      version?: string
+      error?: string
+    }
+    // A failed check is not worth a banner - it is almost always just being
+    // offline, and the app works fine either way.
+    if (!result.available || !result.version) return
+    updateText.textContent = `Version ${result.version} is available.`
+    updateCard.hidden = false
+  }
+
+  updateInstall.onclick = async () => {
+    updateInstall.disabled = true
+    updateText.textContent = 'Downloading the update...'
+    const result = (await window.rd.update.install()) as { started: boolean; reason?: string }
+    if (result.started) {
+      updateText.textContent = 'Installing - this app will restart on its own.'
+      return
+    }
+    updateText.textContent = `Could not install the update: ${result.reason ?? 'unknown error'}`
+    updateInstall.disabled = false
+  }
+
+  void checkForUpdate()
+  // Long-running installs are the normal case for this app, so keep looking
+  // rather than only checking at launch.
+  setInterval(() => void checkForUpdate(), 6 * 60 * 60 * 1000)
 
   // Local clipboard changes go out on whichever session is live; incoming ones
   // are applied by TransferPanel.handleCtrl.

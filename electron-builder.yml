@@ -19,8 +19,17 @@ npmRebuild: true
 mac:
   category: public.app-category.utilities
   icon: build/icon.png
+  # Fixed names: the release keeps the same download URLs on every publish, and
+  # the updater's manifest is generated against these exact filenames.
+  artifactName: RemoteDesk-${arch}.${ext}
   target:
+    # dmg is what a person installs from; the zip is what the in-app updater
+    # downloads, because it can swap a .app bundle without a mounted image.
     - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
       arch:
         - arm64
         - x64
@@ -40,6 +49,7 @@ dmg:
 
 win:
   icon: build/icon.png
+  artifactName: RemoteDesk-Setup.${ext}
   target:
     - target: nsis
       arch:
